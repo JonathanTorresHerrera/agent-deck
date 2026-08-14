@@ -64,6 +64,7 @@ const (
 	// have the bare key can set [hotkeys].agents_panel = "a" and move
 	// quick_approve.
 	hotkeyAgentsPanel = "agents_panel"
+	hotkeyHealthPanel = "health_panel"
 	// Session switcher. While attached it is intercepted in the tmux attach
 	// loop (see internal/tmux/pty.go AttachOptions); on the home screen it is
 	// dispatched like any other hotkey. Must resolve to a "ctrl+<letter>" chord.
@@ -134,6 +135,7 @@ var hotkeyActionOrder = []string{
 	hotkeyDetach,
 	hotkeyWatcherPanel,
 	hotkeyAgentsPanel,
+	hotkeyHealthPanel,
 	hotkeySwitchSession,
 }
 
@@ -184,6 +186,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyDetach:           "ctrl+q",
 	hotkeyWatcherPanel:     "w",
 	hotkeyAgentsPanel:      "alt+a",
+	hotkeyHealthPanel:      "Z",
 	hotkeySwitchSession:    "ctrl+s",
 }
 
