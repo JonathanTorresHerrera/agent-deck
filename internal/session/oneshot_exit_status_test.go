@@ -28,6 +28,7 @@ func TestClassifyTerminatedPane_CleanExitVsCrash(t *testing.T) {
 		haveExitCode bool
 		tool         string
 		hookStatus   string
+		predatesBoot bool
 		want         Status
 		wantSubstate Substate
 	}{
@@ -54,10 +55,19 @@ func TestClassifyTerminatedPane_CleanExitVsCrash(t *testing.T) {
 		{name: "no exit code, claude, no hook record", tool: "claude", want: StatusError, wantSubstate: SubstateUnknownExit},
 		{name: "no exit code, shell (not hook-emitting)", tool: "shell", want: StatusError},
 		{name: "no exit code, unknown tool", tool: "", want: StatusError},
+
+		// Fork patch: no exit code AND the session predates the current boot —
+		// it died with the machine (reboot / VM shutdown), not by crashing, even
+		// when the frozen hook record still says a turn was in flight.
+		{name: "predates boot, claude turn in flight", tool: "claude", hookStatus: "running", predatesBoot: true, want: StatusStopped},
+		{name: "predates boot, claude, no hook record", tool: "claude", predatesBoot: true, want: StatusStopped},
+		{name: "predates boot, shell", tool: "shell", predatesBoot: true, want: StatusStopped},
+		// A known non-zero exit still wins over the boot heuristic.
+		{name: "predates boot but crash exit", exitCode: 1, haveExitCode: true, tool: "claude", predatesBoot: true, want: StatusError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gotSubstate := classifyTerminatedPane(tt.exitCode, tt.haveExitCode, tt.tool, tt.hookStatus)
+			got, gotSubstate := classifyTerminatedPane(tt.exitCode, tt.haveExitCode, tt.tool, tt.hookStatus, tt.predatesBoot)
 			if got != tt.want {
 				t.Errorf("classifyTerminatedPane(%d, %v, %q, %q) = %q, want %q",
 					tt.exitCode, tt.haveExitCode, tt.tool, tt.hookStatus, got, tt.want)

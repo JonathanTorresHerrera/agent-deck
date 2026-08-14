@@ -421,7 +421,8 @@ func TestDaemonAndDirectCLIShareMutationLock(t *testing.T) {
 	t.Fatal("raced storage bytes differ from both serial execution orders after aligning only time fields")
 }
 
-// Start records wall-clock seconds in tool_data, and every save records a
+// Start records wall-clock seconds in tool_data (and, on the fork, the
+// last_accessed column), and every save records a
 // nanosecond last_modified marker. Align only those time fields in the
 // serial fixture so the database byte comparison tests lifecycle state.
 func alignStorageTimes(t *testing.T, racedHome, serialHome string) {
@@ -455,6 +456,26 @@ func alignStorageTimes(t *testing.T, racedHome, serialHome string) {
 		}
 	}
 	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// Fork patch 3: Start also marks the instance accessed (last_accessed,
+	// wall-clock nanoseconds), so align that time field too.
+	accessed, err := raced.Query("SELECT id, last_accessed FROM instances ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer accessed.Close()
+	for accessed.Next() {
+		var id string
+		var at int64
+		if err := accessed.Scan(&id, &at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := serial.Exec("UPDATE instances SET last_accessed=? WHERE id=?", at, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := accessed.Err(); err != nil {
 		t.Fatal(err)
 	}
 	var modified string

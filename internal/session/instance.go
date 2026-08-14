@@ -5099,6 +5099,12 @@ func (i *Instance) Start() error {
 	}
 	defer recordInstanceSpawn(i.ID)
 
+	// Starting a session is an access: keeps the "last opened" timestamp (⏱
+	// in the preview header) truthful across restarts, and anchors the
+	// predates-boot check in classifyTerminatedPane. After the #1873 gate, so
+	// a refused start is not an access.
+	i.MarkAccessed()
+
 	// #1580 diagnosability: clear any stale spawn-failure sidecar and drop a
 	// spawn_attempt trace so a spawn that dies before anything else runs still
 	// leaves a durable record.
@@ -5475,6 +5481,9 @@ func (i *Instance) StartWithMessage(message string) error {
 		return err
 	}
 	defer recordInstanceSpawn(i.ID)
+
+	// Starting a session is an access — see Start().
+	i.MarkAccessed()
 
 	// #1580 diagnosability: clear any stale spawn-failure sidecar and drop a
 	// spawn_attempt trace (same as Start()).
@@ -6156,7 +6165,7 @@ func (i *Instance) terminatedPaneStatus() Status {
 	if i.tmuxSession != nil {
 		exitCode, haveExitCode = i.tmuxSession.PaneDeadExitStatus()
 	}
-	status, substate := classifyTerminatedPane(exitCode, haveExitCode, i.Tool, i.hookStatus)
+	status, substate := classifyTerminatedPane(exitCode, haveExitCode, i.Tool, i.hookStatus, i.lastStartPredatesBoot())
 	i.terminatedPaneSubstate = substate
 	return status
 }
@@ -6179,6 +6188,7 @@ func (i *Instance) applyTerminatedPaneStatus() {
 	tool := i.Tool
 	paneDeadExitStatus := i.paneDeadExitStatusForTest
 	hookStatus := i.hookStatus
+	predatesBoot := i.lastStartPredatesBoot()
 
 	i.mu.Unlock()
 	exitCode, haveExitCode := 0, false
@@ -6188,7 +6198,7 @@ func (i *Instance) applyTerminatedPaneStatus() {
 		}
 		exitCode, haveExitCode = paneDeadExitStatus()
 	}
-	status, substate := classifyTerminatedPane(exitCode, haveExitCode, tool, hookStatus)
+	status, substate := classifyTerminatedPane(exitCode, haveExitCode, tool, hookStatus, predatesBoot)
 	i.mu.Lock()
 
 	if i.Status != StatusStopped {
@@ -6221,12 +6231,25 @@ func (i *Instance) applyTerminatedPaneStatus() {
 //     for backward compatibility, but SubstateUnknownExit says this verdict
 //     is a guess, not a fact (see pattern_unknown_as_first_class_state) —
 //     callers must not treat it as a confirmed crash for e.g. auto-restart.
-func classifyTerminatedPane(exitCode int, haveExitCode bool, tool string, hookStatus string) (Status, Substate) {
+//
+// predatesBoot (fork patch): the instance was last started before the current
+// system boot, so a pane that vanished without an exit code died with the
+// machine (host reboot, WSL VM shutdown) rather than crashing. It outranks the
+// hook record, which a reboot freezes mid-turn.
+func classifyTerminatedPane(exitCode int, haveExitCode bool, tool string, hookStatus string, predatesBoot bool) (Status, Substate) {
 	if haveExitCode {
 		if exitCode == 0 {
 			return StatusStopped, SubstateNone
 		}
 		return StatusError, SubstateNone
+	}
+	// Pane vanished with no exit status recorded. When the session was last
+	// started/opened BEFORE the current system boot, it died with the machine
+	// (host reboot, WSL VM shutdown) — a lifecycle event, not an agent crash.
+	// Reporting ✕ error for every session after a reboot buries real crashes
+	// in noise; report a calm stopped instead.
+	if predatesBoot {
+		return StatusStopped, SubstateNone
 	}
 	if tool == "opencode" {
 		return StatusStopped, SubstateNone
@@ -6242,6 +6265,55 @@ func classifyTerminatedPane(exitCode int, haveExitCode bool, tool string, hookSt
 		}
 	}
 	return StatusError, SubstateNone
+}
+
+// bootTimeOnce caches the kernel boot time read from /proc/stat (btime).
+// In WSL2 this is the VM's boot, which is exactly the right semantics: a VM
+// restart is what takes every pane down at once.
+var (
+	bootTimeOnce   sync.Once
+	bootTimeCached time.Time
+)
+
+func systemBootTime() time.Time {
+	bootTimeOnce.Do(func() {
+		data, err := os.ReadFile("/proc/stat")
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if rest, ok := strings.CutPrefix(line, "btime "); ok {
+				if secs, perr := strconv.ParseInt(strings.TrimSpace(rest), 10, 64); perr == nil {
+					bootTimeCached = time.Unix(secs, 0)
+				}
+				return
+			}
+		}
+	})
+	return bootTimeCached
+}
+
+// lastStartPredatesBoot reports whether this instance was last started or
+// opened before the current system boot — i.e. its pane vanished because the
+// machine went down, not because the agent crashed. Falls back to CreatedAt
+// when the instance has never recorded an access; returns false when the boot
+// time is unavailable (non-Linux, unreadable /proc) so classification keeps
+// its pre-existing behavior.
+func (i *Instance) lastStartPredatesBoot() bool {
+	boot := systemBootTime()
+	if boot.IsZero() {
+		return false
+	}
+	last := i.LastAccessedAt
+	if last.IsZero() {
+		last = i.CreatedAt
+	}
+	if last.IsZero() {
+		// No timestamps at all — cannot place the session relative to boot;
+		// keep the pre-existing classification.
+		return false
+	}
+	return last.Before(boot)
 }
 
 func (i *Instance) UpdateStatus() error {
@@ -9742,6 +9814,9 @@ func (i *Instance) restart(env map[string]string) error {
 	// receipt would be an unowned tree.
 	ownershipCommand := i.Command
 	defer func() { i.commitOwnershipAfterRestart(ownershipCommand) }()
+
+	// A restart is an access — see Start().
+	i.MarkAccessed()
 
 	// #1775: supersede the fast-death watcher from the PREVIOUS spawn here, at
 	// the single entry point, rather than deeper down. restart() has several

@@ -1,7 +1,7 @@
 Session: claude idle
 Profile: goldens
 ID:      golden-sess-1
-Status:  ✕ error
+Status:  ■ stopped
 Path:    /repo/app
 Group:   my-sessions
 Tool:    claude

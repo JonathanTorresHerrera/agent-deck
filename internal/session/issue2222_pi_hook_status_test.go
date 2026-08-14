@@ -219,7 +219,7 @@ func TestIssue2222_PiTerminatedPaneUsesHookEvidence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStatus, gotSubstate := classifyTerminatedPane(0, false, tt.tool, tt.hookStatus)
+			gotStatus, gotSubstate := classifyTerminatedPane(0, false, tt.tool, tt.hookStatus, false)
 			if gotStatus != tt.wantStatus || gotSubstate != tt.wantSubstate {
 				t.Errorf("classifyTerminatedPane(_, false, %q, %q) = %v/%v, want %v/%v",
 					tt.tool, tt.hookStatus, gotStatus, gotSubstate, tt.wantStatus, tt.wantSubstate)
