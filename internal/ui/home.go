@@ -20917,24 +20917,30 @@ func (h *Home) renderNotesSection(inst *session.Instance, width, maxLines int) s
 		if len(rawLines) == 0 {
 			lines = append(lines, emptyStyle.Render("No notes"))
 		} else {
-			overflow := len(rawLines) > notesBodyLines
-			displayLines := rawLines
-			if overflow {
-				displayLines = rawLines[:notesBodyLines]
-			}
-			for _, line := range displayLines {
+			// Word-wrap note lines to the panel width instead of truncating,
+			// so full notes stay readable. cellTruncate stays as the
+			// keycap-safe final gate on every wrapped row: #937 v2 —
+			// ansi/uniseg miss keycap clusters (#️⃣ 0️⃣–9️⃣ *️⃣), so any row
+			// WrapWc leaves oversized would otherwise reintroduce #937's
+			// per-frame row-offset drift. See cellwidth.go.
+			var wrappedLines []string
+			for _, line := range rawLines {
 				safe := stripControlCharsPreserveANSI(line)
-				// #937 v2: cellTruncate (not ansi.Truncate) is the truncation
-				// gate for pane content. ansi/uniseg miss keycap clusters
-				// (#️⃣ 0️⃣–9️⃣ *️⃣) — exactly the emoji @jennings reported
-				// against v1.9.3 — so PR #948's swap to ansi.Truncate alone
-				// still let oversized lines past the gate and reproduced
-				// #937's per-frame row-offset drift. See cellwidth.go.
-				safe = cellTruncate(safe, contentWidth, "...")
-				lines = append(lines, notesStyle.Render(safe))
+				wrapped := ansi.WrapWc(safe, contentWidth, "")
+				for _, wl := range strings.Split(wrapped, "\n") {
+					wrappedLines = append(wrappedLines, cellTruncate(wl, contentWidth, "..."))
+				}
+			}
+			overflow := len(wrappedLines) > notesBodyLines
+			displayLines := wrappedLines
+			if overflow {
+				displayLines = wrappedLines[:notesBodyLines]
+			}
+			for _, wl := range displayLines {
+				lines = append(lines, notesStyle.Render(wl))
 			}
 			if overflow && len(lines) > 0 {
-				more := len(rawLines) - notesBodyLines
+				more := len(wrappedLines) - notesBodyLines
 				lines[len(lines)-1] = hintStyle.Render(fmt.Sprintf("... +%d more lines", more))
 			}
 		}
