@@ -704,6 +704,8 @@ type Home struct {
 	costLineHideWhenZero bool
 	showCostDashboard    bool
 	costDashboard        costDashboard
+	showHealthPanel      bool
+	healthPanel          healthPanel
 
 	// System stats collector (CPU, RAM, disk, etc.)
 	sysStatsCollector *sysinfo.Collector
@@ -8427,6 +8429,29 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h, nil // consume all other keys
 		}
 
+		if h.showHealthPanel {
+			switch keyStr := msg.String(); keyStr {
+			case "q", "esc", h.actionKey(hotkeyHealthPanel):
+				h.showHealthPanel = false
+			case "r":
+				h.healthPanel.refresh(h.instances)
+			case "j", "down":
+				h.healthPanel.scrollOffset++
+			case "k", "up":
+				if h.healthPanel.scrollOffset > 0 {
+					h.healthPanel.scrollOffset--
+				}
+			case "ctrl+d", "pgdown":
+				h.healthPanel.scrollOffset += 10
+			case "ctrl+u", "pgup":
+				h.healthPanel.scrollOffset -= 10
+				if h.healthPanel.scrollOffset < 0 {
+					h.healthPanel.scrollOffset = 0
+				}
+			}
+			return h, nil // consume all other keys
+		}
+
 		if h.notesEditing {
 			return h.handleNotesEditorKey(msg)
 		}
@@ -11149,6 +11174,13 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			h.statusFilter = session.StatusError
 		}
 		h.rebuildFlatItems()
+		return h, nil
+
+	case h.actionKey(hotkeyHealthPanel):
+		// Full-screen deck diagnostics: phantom/ghost sessions, duplicate
+		// conversation claims, orphaned host processes, infra daemons.
+		h.showHealthPanel = true
+		h.healthPanel = newHealthPanel(h.instances, h.width, h.height)
 		return h, nil
 
 	case FilterKeyActive, "shift+5":
@@ -16197,6 +16229,10 @@ func (h *Home) renderFrame() string {
 		return h.costDashboard.View()
 	}
 
+	if h.showHealthPanel {
+		return h.healthPanel.View()
+	}
+
 	// Reuse viewBuilder to reduce allocations (reset and pre-allocate)
 	h.viewBuilder.Reset()
 	h.viewBuilder.Grow(32768) // Pre-allocate 32KB for typical view size
@@ -17449,6 +17485,9 @@ func (h *Home) renderHelpBarMinimal() string {
 	if key := h.actionKey(hotkeySearch); key != "" {
 		globalParts = append(globalParts, globalStyle.Render(key))
 	}
+	if key := h.actionKey(hotkeyHealthPanel); key != "" {
+		globalParts = append(globalParts, globalStyle.Render(key))
+	}
 	if key := h.actionKey(hotkeySettings); key != "" {
 		globalParts = append(globalParts, globalStyle.Render(key))
 	}
@@ -17577,6 +17616,9 @@ func (h *Home) renderHelpBarCompact() string {
 	globalStyle := lipgloss.NewStyle().Foreground(ColorComment)
 	globalParts := []string{globalStyle.Render("↑↓ Nav")}
 	if key := h.actionKey(hotkeySearch); key != "" {
+		globalParts = append(globalParts, globalStyle.Render(key))
+	}
+	if key := h.actionKey(hotkeyHealthPanel); key != "" {
 		globalParts = append(globalParts, globalStyle.Render(key))
 	}
 	if key := h.actionKey(hotkeySettings); key != "" {
@@ -17822,6 +17864,9 @@ func (h *Home) renderHelpBarFull() string {
 		globalParts = append(globalParts, globalStyle.Render(key+" Search"))
 	}
 	globalParts = append(globalParts, globalStyle.Render("G Global"))
+	if key := h.actionKey(hotkeyHealthPanel); key != "" {
+		globalParts = append(globalParts, globalStyle.Render(key+" Health"))
+	}
 	if key := h.actionKey(hotkeySettings); key != "" {
 		globalParts = append(globalParts, globalStyle.Render(key+" Settings"))
 	}

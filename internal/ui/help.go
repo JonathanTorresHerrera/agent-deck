@@ -366,6 +366,26 @@ func (h *HelpOverlay) View() string {
 				{"--profile <name>", "Use specific profile"},
 			},
 		},
+		{
+			title: "STATUS BAR LEGEND (top of screen)",
+			items: [][2]string{
+				{"( ● ◐ ○ )", "Logo pulse — mirrors running/waiting/idle counts"},
+				{"● N running", "Agent actively working (green)"},
+				{"◐ N waiting", "Agent finished / needs your input (orange)"},
+				{"○ N idle", "Waiting but already acknowledged by you (grey)"},
+				{"■ N stopped", "Not running — stopped cleanly or died with a reboot"},
+				{"✕ N error", "Crashed — a live pane with a real failure"},
+				{"⚙ N%", "Host CPU usage ([system_stats] in config.toml)"},
+				{"⛁ used/total", "Host RAM used / total"},
+				{"• used/total", "Disk used / total"},
+				{"⇅ ↓N ↑N", "Network down/up throughput"},
+				{"Row 2: All ● ◐ ○ ■", "Per-status session counts for the current tab"},
+				{"! @ # $", "Filter list to running / waiting / idle / error only"},
+				{"0  %  ^", "Show all • open sessions only • archived"},
+				{"t", "Cycle group view (tabs / tree / flat)"},
+				{"$", "Also opens the cost dashboard when cost tracking is on"},
+			},
+		},
 	}
 
 	// The Agents row appears only once something has been adopted. The whole
