@@ -905,6 +905,8 @@ type Home struct {
 	costLineHideWhenZero bool
 	showCostDashboard    bool
 	costDashboard        costDashboard
+	showHealthPanel      bool
+	healthPanel          healthPanel
 
 	// System stats collector (CPU, RAM, disk, etc.)
 	sysStatsCollector *sysinfo.Collector
@@ -10168,6 +10170,29 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h, nil // consume all other keys
 		}
 
+		if h.showHealthPanel {
+			switch keyStr := msg.String(); keyStr {
+			case "q", "esc", h.actionKey(hotkeyHealthPanel):
+				h.showHealthPanel = false
+			case "r":
+				h.healthPanel.refresh(h.instances)
+			case "j", "down":
+				h.healthPanel.scrollOffset++
+			case "k", "up":
+				if h.healthPanel.scrollOffset > 0 {
+					h.healthPanel.scrollOffset--
+				}
+			case "ctrl+d", "pgdown":
+				h.healthPanel.scrollOffset += 10
+			case "ctrl+u", "pgup":
+				h.healthPanel.scrollOffset -= 10
+				if h.healthPanel.scrollOffset < 0 {
+					h.healthPanel.scrollOffset = 0
+				}
+			}
+			return h, nil // consume all other keys
+		}
+
 		if h.notesEditing {
 			return h.handleNotesEditorKey(msg)
 		}
@@ -13036,6 +13061,13 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case FilterKeyError, "shift+7":
 		// Filter to error sessions only.
 		return h, h.changeStatusFilter(session.StatusError)
+
+	case h.actionKey(hotkeyHealthPanel):
+		// Full-screen deck diagnostics: phantom/ghost sessions, duplicate
+		// conversation claims, orphaned host processes, infra daemons.
+		h.showHealthPanel = true
+		h.healthPanel = newHealthPanel(h.instances, h.width, h.height)
+		return h, nil
 
 	case FilterKeyActive, "shift+5":
 		// Filter to open sessions (excludes error/stopped)
@@ -18812,6 +18844,10 @@ func (h *Home) renderFrame() string {
 		return h.costDashboard.View()
 	}
 
+	if h.showHealthPanel {
+		return h.healthPanel.View()
+	}
+
 	// Reuse viewBuilder to reduce allocations (reset and pre-allocate)
 	h.viewBuilder.Reset()
 	h.viewBuilder.Grow(32768) // Pre-allocate 32KB for typical view size
@@ -20448,6 +20484,9 @@ func (h *Home) renderHelpBarMinimal() string {
 	if key := h.actionKey(hotkeySearch); key != "" {
 		globalParts = append(globalParts, globalStyle.Render(key))
 	}
+	if key := h.actionKey(hotkeyHealthPanel); key != "" {
+		globalParts = append(globalParts, globalStyle.Render(key))
+	}
 	if key := h.actionKey(hotkeySettings); key != "" {
 		globalParts = append(globalParts, globalStyle.Render(key))
 	}
@@ -20846,6 +20885,14 @@ func (h *Home) renderHelpBarFull() string {
 	if helpKey != "" {
 		droppableGlobal = append(droppableGlobal, globalStyle.Render(helpKey+" Help"))
 	}
+	// Fork patch 4: the health panel hint is the first global hint to go, and
+	// sits after Help so upstream's 120-159 column Help rescue (which pins the
+	// last droppable) still lands on Help, not on Health.
+	healthIdx := -1
+	if key := h.actionKey(hotkeyHealthPanel); key != "" {
+		healthIdx = len(droppableGlobal)
+		droppableGlobal = append(droppableGlobal, globalStyle.Render(key+" Health"))
+	}
 
 	leftPrefix := contextLabel
 	if reloadIndicator != "" {
@@ -20877,8 +20924,14 @@ func (h *Home) renderHelpBarFull() string {
 		}
 		shorten(primaryHints)
 		shorten(secondaryHints)
-		parts.nav += sep + droppableGlobal[len(droppableGlobal)-1]
-		parts.droppable = droppableGlobal[:len(droppableGlobal)-1]
+		// Fork patch 4: Health is the last droppable; on these crowded rows it
+		// goes, and Help (the one before it) is the hint that gets pinned.
+		rescue := droppableGlobal
+		if healthIdx >= 0 {
+			rescue = droppableGlobal[:healthIdx]
+		}
+		parts.nav += sep + rescue[len(rescue)-1]
+		parts.droppable = rescue[:len(rescue)-1]
 		parts.primary = primaryHints
 		parts.secondary = secondaryHints
 		helpContent = h.fitFullFooter(parts)
