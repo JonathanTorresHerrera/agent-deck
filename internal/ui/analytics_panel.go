@@ -265,12 +265,22 @@ func (p *AnalyticsPanel) renderGeminiSessionInfo() string {
 		valueStyle.Render(fmt.Sprintf("%d", p.geminiAnalytics.TotalTurns)),
 	))
 
-	// Start time if available
+	// Start time if available (transcript timestamps are UTC; show local)
 	if !p.geminiAnalytics.StartTime.IsZero() {
-		timeStr := p.geminiAnalytics.StartTime.Format("Jan 2 15:04")
+		timeStr := p.geminiAnalytics.StartTime.Local().Format("Jan 2 15:04")
 		b.WriteString(fmt.Sprintf("  %s %s\n",
 			dimStyle.Render("Started:"),
 			valueStyle.Render(timeStr),
+		))
+	}
+
+	// Last activity from the newest transcript record (see renderSessionInfo).
+	if !p.geminiAnalytics.LastActive.IsZero() {
+		la := p.geminiAnalytics.LastActive.Local()
+		b.WriteString(fmt.Sprintf("  %s %s %s\n",
+			dimStyle.Render("Last active:"),
+			valueStyle.Render(formatRelativeTime(p.geminiAnalytics.LastActive)),
+			dimStyle.Render("("+la.Format("Jan 2 15:04")+")"),
 		))
 	}
 
@@ -456,12 +466,24 @@ func (p *AnalyticsPanel) renderSessionInfo() string {
 		valueStyle.Render(fmt.Sprintf("%d", p.analytics.TotalTurns)),
 	))
 
-	// Start time if available
+	// Start time if available (transcript timestamps are UTC; show local)
 	if !p.analytics.StartTime.IsZero() {
-		timeStr := p.analytics.StartTime.Format("Jan 2 15:04")
+		timeStr := p.analytics.StartTime.Local().Format("Jan 2 15:04")
 		b.WriteString(fmt.Sprintf("  %s %s\n",
 			dimStyle.Render("Started:"),
 			valueStyle.Render(timeStr),
+		))
+	}
+
+	// Last activity — the wall-clock time of the newest transcript record.
+	// Parsed from the JSONL rather than the live pane, so a stopped or
+	// killed session (e.g. after a reboot) still shows when it last worked.
+	if !p.analytics.LastActive.IsZero() {
+		la := p.analytics.LastActive.Local()
+		b.WriteString(fmt.Sprintf("  %s %s %s\n",
+			dimStyle.Render("Last active:"),
+			valueStyle.Render(formatRelativeTime(p.analytics.LastActive)),
+			dimStyle.Render("("+la.Format("Jan 2 15:04")+")"),
 		))
 	}
 
