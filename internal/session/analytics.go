@@ -87,7 +87,9 @@ var modelContextWindowPrefixes = []struct {
 	// 4.6 models: 1M context
 	{"claude-opus-4-6", 1000000},
 	{"claude-sonnet-4-6", 1000000},
-	// 4.x models (non-4.6/4.7): 200k context
+	// Haiku 4.5: 200k context (explicit; also caught by claude-haiku-4)
+	{"claude-haiku-4-5", 200000},
+	// 4.x models (non-4.6/4.7/4.8): 200k context
 	{"claude-opus-4", 200000},
 	{"claude-sonnet-4", 200000},
 	{"claude-haiku-4", 200000},
@@ -131,8 +133,23 @@ type ModelPricing struct {
 	CacheWrite float64
 }
 
-// modelPricing contains pricing per million tokens for each model (as of Jan 2025)
+// modelPricing contains pricing per million tokens for each model.
+// Cache-read = 0.1x input, cache-write (5-min TTL) = 1.25x input. Source: claude-api pricing table (2026-07).
 var modelPricing = map[string]ModelPricing{
+	// Claude 5 family
+	"claude-fable-5":  {Input: 10.0, Output: 50.0, CacheRead: 1.0, CacheWrite: 12.5},
+	"claude-mythos-5": {Input: 10.0, Output: 50.0, CacheRead: 1.0, CacheWrite: 12.5},
+	// opus-5 pricing UNVERIFIED — assumed opus-tier ($5/$25, matching 4.6/4.7/4.8);
+	// confirm against the official pricing page and correct if it differs.
+	"claude-opus-5":   {Input: 5.0, Output: 25.0, CacheRead: 0.50, CacheWrite: 6.25},
+	"claude-sonnet-5": {Input: 3.0, Output: 15.0, CacheRead: 0.30, CacheWrite: 3.75},
+	// Opus 4.x (1M-context tier): $5 / $25
+	"claude-opus-4-8": {Input: 5.0, Output: 25.0, CacheRead: 0.50, CacheWrite: 6.25},
+	"claude-opus-4-7": {Input: 5.0, Output: 25.0, CacheRead: 0.50, CacheWrite: 6.25},
+	"claude-opus-4-6": {Input: 5.0, Output: 25.0, CacheRead: 0.50, CacheWrite: 6.25},
+	// Sonnet / Haiku 4.x
+	"claude-sonnet-4-6":        {Input: 3.0, Output: 15.0, CacheRead: 0.30, CacheWrite: 3.75},
+	"claude-haiku-4-5":         {Input: 1.0, Output: 5.0, CacheRead: 0.10, CacheWrite: 1.25},
 	"claude-sonnet-4-20250514": {Input: 3.0, Output: 15.0, CacheRead: 0.30, CacheWrite: 3.75},
 	"claude-opus-4-20250514":   {Input: 15.0, Output: 75.0, CacheRead: 1.50, CacheWrite: 18.75},
 	"claude-3-5-sonnet":        {Input: 3.0, Output: 15.0, CacheRead: 0.30, CacheWrite: 3.75},
