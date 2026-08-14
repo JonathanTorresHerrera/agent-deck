@@ -22,28 +22,36 @@ func TestClassifyTerminatedPane_CleanExitVsCrash(t *testing.T) {
 		exitCode     int
 		haveExitCode bool
 		tool         string
+		predatesBoot bool
 		want         Status
 	}{
 		// Exit code known (remain-on-exit): the code decides, tool is irrelevant.
-		{"clean exit 0 (shell)", 0, true, "shell", StatusStopped},
-		{"clean exit 0 (claude)", 0, true, "claude", StatusStopped},
-		{"clean exit 0 (sandboxed worker)", 0, true, "codex", StatusStopped},
-		{"crash exit 1", 1, true, "shell", StatusError},
-		{"crash exit 137 (SIGKILL)", 137, true, "claude", StatusError},
-		{"crash exit 2 (opencode)", 2, true, "opencode", StatusError},
+		{"clean exit 0 (shell)", 0, true, "shell", false, StatusStopped},
+		{"clean exit 0 (claude)", 0, true, "claude", false, StatusStopped},
+		{"clean exit 0 (sandboxed worker)", 0, true, "codex", false, StatusStopped},
+		{"crash exit 1", 1, true, "shell", false, StatusError},
+		{"crash exit 137 (SIGKILL)", 137, true, "claude", false, StatusError},
+		{"crash exit 2 (opencode)", 2, true, "opencode", false, StatusError},
 
 		// No exit code (pane torn down): fall back to the per-tool heuristic.
-		{"no exit code, opencode clean /exit", 0, false, "opencode", StatusStopped},
-		{"no exit code, claude crash", 0, false, "claude", StatusError},
-		{"no exit code, shell", 0, false, "shell", StatusError},
-		{"no exit code, unknown tool", 0, false, "", StatusError},
+		{"no exit code, opencode clean /exit", 0, false, "opencode", false, StatusStopped},
+		{"no exit code, claude crash", 0, false, "claude", false, StatusError},
+		{"no exit code, shell", 0, false, "shell", false, StatusError},
+		{"no exit code, unknown tool", 0, false, "", false, StatusError},
+
+		// No exit code AND the session predates the current boot: it died with
+		// the machine (reboot / VM shutdown), not by crashing.
+		{"predates boot, claude", 0, false, "claude", true, StatusStopped},
+		{"predates boot, shell", 0, false, "shell", true, StatusStopped},
+		// A known non-zero exit still wins over the boot heuristic.
+		{"predates boot but crash exit", 1, true, "claude", true, StatusError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyTerminatedPane(tt.exitCode, tt.haveExitCode, tt.tool)
+			got := classifyTerminatedPane(tt.exitCode, tt.haveExitCode, tt.tool, tt.predatesBoot)
 			if got != tt.want {
-				t.Errorf("classifyTerminatedPane(%d, %v, %q) = %q, want %q",
-					tt.exitCode, tt.haveExitCode, tt.tool, got, tt.want)
+				t.Errorf("classifyTerminatedPane(%d, %v, %q, %v) = %q, want %q",
+					tt.exitCode, tt.haveExitCode, tt.tool, tt.predatesBoot, got, tt.want)
 			}
 		})
 	}
