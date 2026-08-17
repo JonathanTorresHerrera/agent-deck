@@ -4871,6 +4871,7 @@ func (i *Instance) Start() error {
 	// in the preview header) truthful across restarts, and anchors the
 	// predates-boot check in classifyTerminatedPane.
 	i.MarkAccessed()
+	clearUserStopMarker(i.ID)
 
 	if i.tmuxSession == nil {
 		return fmt.Errorf("tmux session not initialized")
@@ -5192,6 +5193,7 @@ func (i *Instance) StartWithMessage(message string) error {
 
 	// Starting a session is an access — see Start().
 	i.MarkAccessed()
+	clearUserStopMarker(i.ID)
 
 	if i.tmuxSession == nil {
 		return fmt.Errorf("tmux session not initialized")
@@ -8675,6 +8677,10 @@ func (i *Instance) killInternal(sync bool) error {
 	// inside the stale-gen window.
 	i.bumpSpawnGenAndBarrier()
 
+	// Explicit teardown: record user intent so reboot recovery never
+	// resurrects this session (see user_stop_marker.go).
+	markUserStopped(i.ID)
+
 	// Issue #965 wiring (PR #1000 follow-up): claude/codex/gemini spawn
 	// stdio MCP children when they read .mcp.json — agent-deck never
 	// has a direct exec.Command for them, so spawn-time PID
@@ -8839,6 +8845,7 @@ func (i *Instance) restart(env map[string]string) error {
 
 	// A restart is an access — see Start().
 	i.MarkAccessed()
+	clearUserStopMarker(i.ID)
 
 	// #1775: supersede the fast-death watcher from the PREVIOUS spawn here, at
 	// the single entry point, rather than deeper down. restart() has several
