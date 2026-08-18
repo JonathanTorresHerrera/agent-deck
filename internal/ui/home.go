@@ -19984,6 +19984,23 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			b.WriteString(labelStyle.Render("Session: "))
 			b.WriteString(valueStyle.Render(selected.ClaudeSessionID))
 			b.WriteString("\n")
+
+			// Remote-control display name — what claude.ai's session list
+			// calls this session, so a remote user can match deck sessions to
+			// phone/web rows. Probed from the live pane's --name flag; a pane
+			// spawned before the --name patch registers an auto
+			// hostname-petname the deck cannot know, so say when the friendly
+			// name takes over instead of guessing.
+			if remoteName := selected.RemoteSessionName(); remoteName != "" {
+				b.WriteString(labelStyle.Render("Name:    "))
+				b.WriteString(lipgloss.NewStyle().Foreground(ColorAccent).Render(remoteName))
+				b.WriteString("\n")
+			} else if title := strings.TrimSpace(selected.Title); title != "" {
+				b.WriteString(labelStyle.Render("Name:    "))
+				b.WriteString(lipgloss.NewStyle().Foreground(ColorText).Italic(true).
+					Render("auto petname — \"" + title + "\" after restart"))
+				b.WriteString("\n")
+			}
 		} else {
 			statusStyle := lipgloss.NewStyle().Foreground(ColorText)
 			b.WriteString(labelStyle.Render("Status:  "))

@@ -603,6 +603,12 @@ type Instance struct {
 	// be held hostage by a wedged tmux subprocess.
 	spawnWriteMu sync.Mutex
 
+	// Remote-name probe cache (see RemoteSessionName in remote_name.go).
+	// Not serialized — re-probed lazily after load.
+	remoteNameMu  sync.Mutex
+	remoteNameVal string
+	remoteNameAt  time.Time
+
 	// lastErrorCheck tracks when we last confirmed the session doesn't exist
 	// Used to skip expensive Exists() checks for ghost sessions (sessions in JSON but not in tmux)
 	// Not serialized - resets on load, but that's fine since we'll recheck on first poll
