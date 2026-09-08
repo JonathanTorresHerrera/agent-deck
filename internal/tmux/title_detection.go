@@ -11,12 +11,13 @@ import (
 // TitleState represents the state inferred from the tmux pane title.
 // Claude Code sets pane titles via OSC escape sequences:
 //   - Braille spinner chars (U+2800-28FF) while actively working
+//   - Moon-phase spinner chars (◐◑◒◓) while actively working, Claude 2.1.26x+
 //   - Done markers (✳✻✽✶✢) when a task completes
 type TitleState int
 
 const (
 	TitleStateUnknown TitleState = iota // No recognizable pattern (non-Claude tools)
-	TitleStateWorking                   // Braille spinner detected = actively working
+	TitleStateWorking                   // Spinner detected = actively working
 	TitleStateDone                      // Done marker detected, fall through to prompt detection
 )
 
@@ -233,7 +234,7 @@ func GetCachedPaneInfoSnapshot(sessionName string) (PaneInfo, time.Time, bool) {
 }
 
 // AnalyzePaneTitle determines session state from the pane title.
-// Priority: Braille spinner > Done marker > Unknown.
+// Priority: spinner (Braille or moon-phase) > Done marker > Unknown.
 //
 // NOTE: We intentionally do NOT use pane_current_command to detect "exited" state.
 // Claude Code frequently spawns bash subprocesses for tool execution, and tmux
@@ -246,8 +247,12 @@ func AnalyzePaneTitle(title, _ string) TitleState {
 		return TitleStateUnknown
 	}
 
-	// Braille spinner in title = Claude is actively working
-	if containsBrailleChar(title) {
+	// Spinner in title = Claude is actively working. Braille frames are the
+	// classic set; Claude 2.1.26x animates moon phases instead, and a pane
+	// whose spinner goes unrecognized falls through to content sniffing —
+	// which on WSL-interop panes (pane_current_command is always the interop
+	// stub) can read a promptless screen as an error banner.
+	if containsBrailleChar(title) || containsMoonPhaseChar(title) {
 		return TitleStateWorking
 	}
 
@@ -273,9 +278,10 @@ func CleanPaneTitle(title string) string {
 	// Strip known spinner/done-marker runes (·✳✽✶✻✢ and braille ⠋⠙⠹…).
 	cleaned := StripSpinnerRunes(title)
 	// Also strip any remaining Braille characters (U+2800-28FF) that Claude Code
-	// may use as spinner frames beyond the canonical set.
+	// may use as spinner frames beyond the canonical set, and the moon-phase
+	// frames (U+25D0-25D3) it animates from 2.1.26x on.
 	cleaned = strings.TrimLeftFunc(cleaned, func(r rune) bool {
-		return r >= 0x2800 && r <= 0x28FF
+		return (r >= 0x2800 && r <= 0x28FF) || (r >= 0x25D0 && r <= 0x25D3)
 	})
 	cleaned = strings.TrimSpace(cleaned)
 	switch cleaned {
@@ -291,6 +297,20 @@ func CleanPaneTitle(title string) string {
 func containsBrailleChar(s string) bool {
 	for _, r := range s {
 		if r >= 0x2800 && r <= 0x28FF {
+			return true
+		}
+	}
+	return false
+}
+
+// containsMoonPhaseChar returns true if the string contains any of the four
+// moon-phase frames (◐◑◒◓, U+25D0-25D3) Claude Code animates in the pane title
+// while actively processing, from ~2.1.26x on. Field evidence (2026-09-07, a
+// 30-session fleet): every busy pane titled "◐/◑ <name>" and every settled one
+// "✳ <name>", with the frame observed advancing ◑→◐ between samples.
+func containsMoonPhaseChar(s string) bool {
+	for _, r := range s {
+		if r >= 0x25D0 && r <= 0x25D3 {
 			return true
 		}
 	}

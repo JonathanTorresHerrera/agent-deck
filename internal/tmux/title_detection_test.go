@@ -68,6 +68,37 @@ func TestContainsDoneMarker(t *testing.T) {
 	}
 }
 
+func TestContainsMoonPhaseChar(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"empty string", "", false},
+		{"plain text", "hello world", false},
+		{"left half black ◐", "◐ Setup", true},
+		{"right half black ◑", "◑ Setup", true},
+		{"lower half black ◒", "◒ Agent-Deck", true},
+		{"upper half black ◓", "◓ Agent-Deck", true},
+		{"range start U+25D0", string(rune(0x25D0)), true},
+		{"range end U+25D3", string(rune(0x25D3)), true},
+		{"just below range U+25CF", string(rune(0x25CF)), false},
+		{"just above range U+25D4", string(rune(0x25D4)), false},
+		{"done marker only", "✳ Worked for 54s", false},
+		{"braille only", "⠋ Testing", false},
+		{"frame at end", "Setup ◐", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsMoonPhaseChar(tt.input)
+			if got != tt.want {
+				t.Errorf("containsMoonPhaseChar(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAnalyzePaneTitle(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -79,6 +110,13 @@ func TestAnalyzePaneTitle(t *testing.T) {
 		{"braille spinner + claude", "⠂ Testing Papaorch", "claude", TitleStateWorking},
 		{"braille spinner + bash", "⠋ Running tools", "bash", TitleStateWorking}, // bash during tool use
 		{"braille spinner only", "⠹", "claude", TitleStateWorking},
+
+		// Working state: moon-phase spinner (Claude 2.1.26x+). The interop stub
+		// "init" is the real pane_current_command on WSL panes.
+		{"moon spinner ◐ + claude", "◐ Setup", "claude", TitleStateWorking},
+		{"moon spinner ◑ + interop stub", "◑ Agent-Deck", "init", TitleStateWorking},
+		{"moon spinner ◒ only", "◒", "claude", TitleStateWorking},
+		{"moon spinner ◓ + bash", "◓ Running tools", "bash", TitleStateWorking},
 
 		// Done state: done marker present (regardless of current command)
 		{"done marker + claude", "✳ Worked for 54s", "claude", TitleStateDone},
@@ -96,6 +134,8 @@ func TestAnalyzePaneTitle(t *testing.T) {
 		{"gemini title", "Gemini CLI", "gemini", TitleStateUnknown},
 
 		// Edge cases
+		{"moon + done marker", "◐ ✳ mixed signals", "claude", TitleStateWorking}, // spinner wins
+		{"circle outside moon range", "◔ task", "claude", TitleStateUnknown},
 		{"braille + done marker", "⠋ ✳ mixed signals", "claude", TitleStateWorking}, // braille wins
 		{"done + version string", "✳ claude v2.1.25", "claude", TitleStateDone},
 	}
