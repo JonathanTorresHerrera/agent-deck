@@ -35,6 +35,11 @@ func TestCleanPaneTitle(t *testing.T) {
 		{"U+2800 braille space prefix", string(rune(0x2800)) + " Some task", "Some task"},
 		{"U+28FF high braille prefix", string(rune(0x28FF)) + " Other task", "Other task"},
 
+		// Moon-phase spinner prefix (U+25D0-25D3, Claude 2.1.26x+)
+		{"moon spinner ◐ + description", "◐ Setup", "Setup"},
+		{"moon spinner ◑ + description", "◑ Agent-Deck", "Agent-Deck"},
+		{"moon spinner ◓ + multiword", "◓ Patien Split first and last", "Patien Split first and last"},
+
 		// Plain description with no markers → unchanged
 		{"plain description", "Implement login flow", "Implement login flow"},
 		{"plain with numbers", "Fix issue #42", "Fix issue #42"},
