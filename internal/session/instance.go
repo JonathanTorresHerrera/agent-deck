@@ -5950,7 +5950,13 @@ func (i *Instance) UpdateStatus() error {
 	// COLD LOAD: CLI doesn't run StatusFileWatcher, so hookStatus is always empty.
 	// Read the hook file from disk once to give CLI the same fast path as the TUI.
 	if i.hookStatus == "" && (IsClaudeCompatible(i.Tool) || IsCodexCompatible(i.Tool) || i.Tool == "gemini" || i.Tool == "hermes" || i.Tool == "cursor") {
-		if hs := readHookStatusFile(i.ID); hs != nil {
+		// The same ownership check UpdateHookStatus applies: the file on disk
+		// still holds whatever the last hook wrote, including a foreign
+		// ephemeral's terminal event, and adopting it here would re-introduce
+		// the flip for every cold reader (the CLI, and the TUI whenever
+		// hookStatus is empty). Skipping the sample falls through to tmux
+		// detection, which reports what the pane is actually doing.
+		if hs := readHookStatusFile(i.ID); hs != nil && !i.hookCwdIsForeign(hs.Cwd) {
 			i.hookStatus = hs.Status
 			i.hookEvent = hs.Event
 			i.hookLastUpdate = hs.UpdatedAt
@@ -6486,6 +6492,30 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 	// the session is already gone, so binding its (possibly reused) id onto a
 	// now-dead instance is the corruption we are preventing, not a feature.
 	if isTerminalHookEvent(status.Event) {
+		// The #1729 ownership check further down is unreachable for terminal
+		// events, but the bookkeeping above has ALREADY applied this payload's
+		// status — so make the check here too. A terminal event whose cwd is
+		// provably outside every path this instance owns is a foreign
+		// ephemeral's death: a claude child that inherited
+		// AGENTDECK_INSTANCE_ID from the pane environment (a `claude -p`
+		// worker, or a background agent the session spawned from another
+		// directory) exiting. Its "dead" status describes the child, not us,
+		// and must not flip this instance to error.
+		//
+		// Field case (2026-09-08): a session running background agents out of
+		// /tmp alternated between error and running for days — one SessionEnd
+		// per agent exit set "dead", the session's next real hook set it back.
+		// An empty cwd stays unguarded, exactly as in hookCwdIsForeign: no
+		// evidence is not evidence of foreignness.
+		if i.hookCwdIsForeign(status.Cwd) {
+			restoreHook()
+			_ = WriteSessionIDLifecycleEvent(SessionIDLifecycleEvent{
+				InstanceID: i.ID, Tool: i.Tool, Action: "reject",
+				Source: "hook_payload", OldID: i.ClaudeSessionID,
+				Candidate: strings.TrimSpace(status.SessionID),
+				HookEvent: status.Event, Reason: "terminal_event_cwd_outside_instance_paths",
+			})
+		}
 		return
 	}
 
