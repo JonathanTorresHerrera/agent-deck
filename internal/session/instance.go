@@ -1399,6 +1399,10 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				if !i.resumeIdentityAllowed(opts.ResumeSessionID).Allow {
 					freshID = i.replaceRefusedClaudeSessionID()
 				}
+				// "Never interacted with" is a conclusion about the directory
+				// this deck computes, not proof the id is unused; claude exits
+				// on a reused one. See claudeStartIDForFlag.
+				freshID = i.claudeStartIDForFlag(freshID)
 				return fmt.Sprintf(
 					`%sexec %s%s --session-id "%s"%s`,
 					bashExportPrefix, execEnvPrefix, claudeCmd, freshID, extraFlags)
@@ -9579,8 +9583,14 @@ func (i *Instance) buildClaudeResumeCommand() string {
 			envPrefix, bashExportPrefix, claudeCmd, i.ClaudeSessionID, extraFlags)
 	}
 	// Session was never interacted with - use --session-id to create fresh session.
+	// Unless it HAS been: this branch is reached whenever the transcript is not
+	// where the deck expects it, which on a host that spells paths differently
+	// (Windows agent over WSL interop) includes conversations that are alive and
+	// well. Reusing such an id makes claude exit instantly and the pane die with
+	// it, so claudeStartIDForFlag mints a fresh one when the id is really in use.
+	startID := i.claudeStartIDForFlag(i.ClaudeSessionID)
 	return fmt.Sprintf("%s%sexec %s --session-id %s%s",
-		envPrefix, bashExportPrefix, claudeCmd, i.ClaudeSessionID, extraFlags)
+		envPrefix, bashExportPrefix, claudeCmd, startID, extraFlags)
 }
 
 // SetGeminiModel sets the Gemini model for this session and triggers a restart if running.
@@ -11148,6 +11158,18 @@ func encodesSameWorkingDir(encodedDir, projectPath, resolvedPath string) bool {
 		}
 		if encodedDir == ConvertToClaudeDirName(candidate) {
 			return true
+		}
+		// Same real directory, spelled the way the HOST-side agent sees it.
+		// A Windows agent reached through WSL interop files under the Windows
+		// spelling of this path (see hostPathSpellings), so the hit is ours —
+		// and `--resume` from this pane will find it, because Claude derives
+		// its project directory from that same cwd. Drive-letter case varies
+		// between recordings ("D--..." and "d--..." both occur), so compare
+		// case-insensitively.
+		for _, alt := range hostPathSpellings(candidate) {
+			if strings.EqualFold(encodedDir, ConvertToClaudeDirName(alt)) {
+				return true
+			}
 		}
 	}
 	return false
