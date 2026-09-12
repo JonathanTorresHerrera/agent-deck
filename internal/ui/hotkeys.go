@@ -35,6 +35,7 @@ const (
 	hotkeyForkWithOptions  = "fork_with_options"
 	hotkeyCopyOutput       = "copy_output"
 	hotkeyCopyPane         = "copy_pane"
+	hotkeyCopyInfo         = "copy_info" // opens the PREVIEW copy picker (session ID, path, ...)
 	hotkeySendOutput       = "send_output"
 	hotkeyExecShell        = "exec_shell"
 	hotkeyOpenShellHere    = "open_shell_here"
@@ -116,6 +117,7 @@ var hotkeyActionOrder = []string{
 	hotkeyForkWithOptions,
 	hotkeyCopyOutput,
 	hotkeyCopyPane,
+	hotkeyCopyInfo,
 	hotkeySendOutput,
 	hotkeyExecShell,
 	hotkeyOpenShellHere,
@@ -167,6 +169,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyForkWithOptions:  "F",
 	hotkeyCopyOutput:       "c",
 	hotkeyCopyPane:         "V",
+	hotkeyCopyInfo:         "C",
 	hotkeySendOutput:       "x",
 	hotkeyExecShell:        "E",
 	hotkeyOpenShellHere:    "H",
@@ -194,6 +197,7 @@ var hotkeyActionDefaultTriggers = map[string][]string{
 	hotkeyQuit:            {"q", "ctrl+c"},
 	hotkeyForkWithOptions: {"F", "shift+f"},
 	hotkeyMoveToGroup:     {"M", "shift+m"},
+	hotkeyCopyInfo:        {"C", "shift+c"},
 	hotkeyWorktreeFinish:  {"W", "shift+w"},
 	hotkeyEditSession:     {"P", "shift+p"},
 }

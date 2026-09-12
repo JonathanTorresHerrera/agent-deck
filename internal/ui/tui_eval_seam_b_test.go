@@ -157,6 +157,7 @@ func seamBNewHome() *Home {
 		geminiModelDialog:    NewGeminiModelDialog(),
 		sessionPickerDialog:  NewSessionPickerDialog(),
 		codeBlockDialog:      NewCodeBlockDialog(),
+		copyFieldPicker:      NewCopyFieldPicker(),
 		worktreeFinishDialog: NewWorktreeFinishDialog(),
 		feedbackDialog:       NewFeedbackDialog(),
 		zoxidePicker:         NewZoxidePicker(),
