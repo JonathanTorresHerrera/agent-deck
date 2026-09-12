@@ -274,6 +274,7 @@ type Home struct {
 	promptInputDialog    *PromptInputDialog    // For prompting the highlighted session from the list without attaching (#1410)
 	sessionPickerDialog  *SessionPickerDialog  // For sending output to another session
 	codeBlockDialog      *CodeBlockDialog      // For copying a fenced code block from session output (#1412)
+	copyFieldPicker      *CopyFieldPicker      // For copying one PREVIEW value (session ID, path, ...) on its own
 	sessionSwitcher      *SessionSwitcher      // In-attach session switcher (Ctrl+Tab / Ctrl+S)
 	scrollbackPager      *ScrollbackPager      // In-attach scrollback pager for the deck's control-mode view (#1491)
 	worktreeFinishDialog *WorktreeFinishDialog // For finishing worktree sessions (merge + cleanup)
@@ -1444,7 +1445,11 @@ type clearMaintenanceMsg struct{}
 type copyResultMsg struct {
 	sessionTitle string
 	lineCount    int
-	err          error
+	// fieldLabel names a single PREVIEW value copied via the copy picker
+	// (e.g. "Session ID"). Empty for the bulk copies, which report a line
+	// count instead.
+	fieldLabel string
+	err        error
 }
 
 // sendOutputResultMsg is sent when async inter-session send completes
@@ -1626,6 +1631,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		promptInputDialog:         NewPromptInputDialog(),
 		sessionPickerDialog:       NewSessionPickerDialog(),
 		codeBlockDialog:           NewCodeBlockDialog(),
+		copyFieldPicker:           NewCopyFieldPicker(),
 		sessionSwitcher:           NewSessionSwitcher(),
 		scrollbackPager:           NewScrollbackPager(),
 		worktreeFinishDialog:      NewWorktreeFinishDialog(),
@@ -6084,6 +6090,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.toolVisibilityPanel.SetSize(msg.Width, msg.Height)
 		}
 		h.geminiModelDialog.SetSize(msg.Width, msg.Height)
+		h.copyFieldPicker.SetSize(msg.Width, msg.Height)
 		h.promptInputDialog.SetSize(msg.Width, msg.Height)
 		h.scrollbackPager.SetSize(msg.Width, msg.Height)
 		// Issue #1366: a resize can reveal the preview pane (single -> stacked/dual).
@@ -7899,12 +7906,18 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case copyResultMsg:
-		if msg.err != nil {
+		switch {
+		case msg.err != nil:
 			h.setError(msg.err)
-		} else {
+		case msg.fieldLabel != "":
+			h.setError(fmt.Errorf("Copied %s to clipboard (%s)", msg.fieldLabel, msg.sessionTitle))
+		default:
 			h.setError(fmt.Errorf("Copied %d lines to clipboard (%s)", msg.lineCount, msg.sessionTitle))
 		}
 		return h, nil
+
+	case copyFieldSelectedMsg:
+		return h, h.copyPreviewField(copyField{label: msg.label, value: msg.value}, msg.sessionTitle)
 
 	case copyPaneResultMsg:
 		switch {
@@ -8384,6 +8397,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.geminiModelDialog.IsVisible() {
 			d, cmd := h.geminiModelDialog.Update(msg)
 			h.geminiModelDialog = d
+			return h, cmd
+		}
+		if h.copyFieldPicker.IsVisible() {
+			d, cmd := h.copyFieldPicker.Update(msg)
+			h.copyFieldPicker = d
 			return h, cmd
 		}
 		if h.promptInputDialog.IsVisible() {
@@ -9367,7 +9385,7 @@ func (h *Home) hasModalVisible() bool {
 		h.newDialog.IsVisible() || h.groupDialog.IsVisible() || h.forkDialog.IsVisible() ||
 		h.confirmDialog.IsVisible() || h.mcpDialog.IsVisible() || h.pluginDialog.IsVisible() || h.skillDialog.IsVisible() ||
 		h.geminiModelDialog.IsVisible() || h.promptInputDialog.IsVisible() || h.sessionPickerDialog.IsVisible() ||
-		h.codeBlockDialog.IsVisible() ||
+		h.codeBlockDialog.IsVisible() || h.copyFieldPicker.IsVisible() ||
 		h.sessionSwitcher.IsVisible() || h.scrollbackPager.IsVisible() ||
 		h.worktreeFinishDialog.IsVisible() || h.editPathsDialog.IsVisible() ||
 		h.editSessionDialog.IsVisible() ||
@@ -10965,13 +10983,20 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case "C", "shift+c":
-		// Copy preview pane info (Repo / Path / Branch) to system clipboard (#791).
-		// Pairs with `c` (copy session output): same fallback chain, different payload.
+	case defaultHotkeyBindings[hotkeyCopyInfo], "shift+c":
+		// Open the copy picker over the preview pane's values (session ID,
+		// path, repo, branch, ...). Mouse selection cannot reach them —
+		// tea.EnableMouseCellMotion means a drag in the preview pane is
+		// consumed by the TUI — so this keyboard path is the only way to get
+		// a single value onto the clipboard. The picker's last entry is the
+		// whole labelled block, which is what this key copied before (#791).
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
-				return h, h.copySessionInfo(item.Session)
+				if !h.copyFieldPicker.Show(item.Session) {
+					h.setError(fmt.Errorf("no preview values to copy"))
+				}
+				return h, nil
 			}
 		}
 		return h, nil
@@ -16057,6 +16082,7 @@ func (h *Home) updateSizes() {
 	h.groupDialog.SetSize(h.width, h.height)
 	h.confirmDialog.SetSize(h.width, h.height)
 	h.geminiModelDialog.SetSize(h.width, h.height)
+	h.copyFieldPicker.SetSize(h.width, h.height)
 	if h.sessionSwitcher != nil {
 		// The switcher is a centered full-screen overlay; keep it sized so a
 		// resize while it is open (notably from the overview, where it can stay
@@ -16200,6 +16226,9 @@ func (h *Home) renderFrame() string {
 	}
 	if h.geminiModelDialog.IsVisible() {
 		return h.geminiModelDialog.View()
+	}
+	if h.copyFieldPicker.IsVisible() {
+		return h.copyFieldPicker.View()
 	}
 	if h.sessionSwitcher.IsVisible() {
 		return h.sessionSwitcher.View()
@@ -17213,6 +17242,43 @@ func renderLaunchModelInfoLines(b *strings.Builder, inst *session.Instance) {
 	b.WriteString("\n")
 }
 
+// renderCopyHintLine advertises the copy keys inside the PREVIEW pane itself.
+//
+// The footer already lists them, but the pane's own values (session ID, path,
+// branch) are the ones a user reaches for, and they cannot be selected with the
+// mouse — the deck runs with mouse reporting on, so a drag never reaches the
+// terminal's selection. The keyboard route therefore has to be visible next to
+// the values it applies to, not only at the bottom of the screen.
+func (h *Home) renderCopyHintLine(b *strings.Builder) {
+	copyInfoKey := h.actionKey(hotkeyCopyInfo)
+	copyOutputKey := h.actionKey(hotkeyCopyOutput)
+	copyPaneKey := h.actionKey(hotkeyCopyPane)
+	if copyInfoKey == "" && copyOutputKey == "" && copyPaneKey == "" {
+		return
+	}
+
+	hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
+	keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	b.WriteString(hintStyle.Render("Copy:    "))
+
+	first := true
+	part := func(key, desc string) {
+		if key == "" {
+			return
+		}
+		if !first {
+			b.WriteString(hintStyle.Render(", "))
+		}
+		first = false
+		b.WriteString(keyStyle.Render(key))
+		b.WriteString(hintStyle.Render(" " + desc))
+	}
+	part(copyInfoKey, "id/path/branch")
+	part(copyOutputKey, "output")
+	part(copyPaneKey, "pane")
+	b.WriteString("\n")
+}
+
 // renderForkHintLine renders the fork keyboard hint line.
 func (h *Home) renderForkHintLine(b *strings.Builder) {
 	quickForkKey := h.actionKey(hotkeyQuickFork)
@@ -17584,6 +17650,9 @@ func (h *Home) renderHelpBarCompact() string {
 			if key := h.actionKey(hotkeyCopyPane); key != "" {
 				contextHints = append(contextHints, h.helpKeyShort(key, "Copy pane"))
 			}
+			if key := h.actionKey(hotkeyCopyInfo); key != "" {
+				contextHints = append(contextHints, h.helpKeyShort(key, "Copy ID/path"))
+			}
 			if key := h.actionKey(hotkeySendOutput); key != "" {
 				contextHints = append(contextHints, h.helpKeyShort(key, "Send"))
 			}
@@ -17689,6 +17758,7 @@ func (h *Home) renderHelpBarFull() string {
 	forkKeys := joinHotkeyLabels(h.actionKey(hotkeyQuickFork), h.actionKey(hotkeyForkWithOptions))
 	copyKey := h.actionKey(hotkeyCopyOutput)
 	copyPaneKey := h.actionKey(hotkeyCopyPane)
+	copyInfoKey := h.actionKey(hotkeyCopyInfo)
 	sendKey := h.actionKey(hotkeySendOutput)
 	execShellKey := h.actionKey(hotkeyExecShell)
 	openShellHereKey := h.actionKey(hotkeyOpenShellHere)
@@ -17784,6 +17854,9 @@ func (h *Home) renderHelpBarFull() string {
 			}
 			if copyPaneKey != "" {
 				primaryHints = append(primaryHints, h.helpKey(copyPaneKey, "Copy pane"))
+			}
+			if copyInfoKey != "" {
+				primaryHints = append(primaryHints, h.helpKey(copyInfoKey, "Copy ID/path"))
 			}
 			if sendKey != "" {
 				primaryHints = append(primaryHints, h.helpKey(sendKey, "Send"))
@@ -20354,6 +20427,10 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			}
 		}
 	}
+
+	// Advertised for every tool, after the tool-specific sections, because the
+	// values above it cannot be reached with the mouse.
+	h.renderCopyHintLine(&b)
 
 	b.WriteString("\n")
 

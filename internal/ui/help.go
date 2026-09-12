@@ -210,6 +210,7 @@ func (h *HelpOverlay) View() string {
 	promptSessionKey := h.key(hotkeyPromptSession, "o")
 	copyKey := h.key(hotkeyCopyOutput, "c")
 	copyPaneKey := h.key(hotkeyCopyPane, "V")
+	copyInfoKey := h.key(hotkeyCopyInfo, "C")
 	sendKey := h.key(hotkeySendOutput, "x")
 	execShellKey := h.key(hotkeyExecShell, "E")
 	openShellHereKey := h.key(hotkeyOpenShellHere, "h")
@@ -300,7 +301,7 @@ func (h *HelpOverlay) View() string {
 				{pinKeys, "Pin (cycle off→top→bottom→off)"},
 				{forkKeys, "Fork session (Claude/Pi)"},
 				{copyKey, "Copy output to clipboard"},
-				{"C", "Copy preview info (Repo / Path / Branch)"},
+				{copyInfoKey, "Copy a preview value (Session ID / Path / Repo / Branch)"},
 				{"Y", "Copy a code block from output"},
 				{copyPaneKey, "Copy visible terminal text, including links"},
 				{sendKey, "Send output to session"},

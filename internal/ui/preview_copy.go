@@ -78,3 +78,26 @@ func (h *Home) copySessionInfo(inst *session.Instance) tea.Cmd {
 		}
 	}
 }
+
+// copyPreviewField returns a tea.Cmd that copies a single PREVIEW value picked
+// from the copy picker. It reports the field by name so the confirmation reads
+// "Copied Session ID to clipboard" rather than a line count, which is the only
+// useful feedback when the payload is one short value.
+func (h *Home) copyPreviewField(field copyField, sessionTitle string) tea.Cmd {
+	return func() tea.Msg {
+		if strings.TrimSpace(field.value) == "" {
+			return copyResultMsg{err: fmt.Errorf("nothing to copy for %s", field.label)}
+		}
+
+		termInfo := tmux.GetTerminalInfo()
+		result, err := clipboard.Copy(field.value, termInfo.SupportsOSC52)
+		if err != nil {
+			return copyResultMsg{err: fmt.Errorf("clipboard: %w", err)}
+		}
+		return copyResultMsg{
+			sessionTitle: sessionTitle,
+			lineCount:    result.LineCount,
+			fieldLabel:   field.label,
+		}
+	}
+}
