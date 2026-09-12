@@ -255,8 +255,8 @@ func (h *HelpOverlay) View() string {
 	copyKey := h.key(hotkeyCopyOutput, "c")
 	copyPaneKey := h.key(hotkeyCopyPane, "V")
 	yoloKey := h.key(hotkeyToggleYolo, "y")
-	copyInfoKey := h.key(hotkeyCopyInfo, "B")
-	contextInspectorKey := h.key(hotkeyContextInspector, "C")
+	copyInfoKey := h.key(hotkeyCopyInfo, "C")
+	contextInspectorKey := h.key(hotkeyContextInspector, "Q")
 	sendKey := h.key(hotkeySendOutput, "x")
 	execShellKey := h.key(hotkeyExecShell, "E")
 	openShellHereKey := h.key(hotkeyOpenShellHere, "h")
@@ -385,7 +385,7 @@ func (h *HelpOverlay) View() string {
 			title: "COPY & TEXT SELECTION",
 			items: [][2]string{
 				{copyKey, "Copy last AI response"},
-				{copyInfoKey, "Copy session info (repo / path / branch)"},
+				{copyInfoKey, "Copy a preview value (ID / path / all info)"},
 				{copyPaneKey, "Copy visible terminal text, including links"},
 				{"Y", "Copy a fenced code block (picker if several)"},
 				// Not a binding: agent-deck holds the terminal in mouse mode 1002

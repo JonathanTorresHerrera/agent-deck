@@ -35,11 +35,12 @@ const (
 	hotkeyForkWithOptions  = "fork_with_options"
 	hotkeyCopyOutput       = "copy_output"
 	hotkeyCopyPane         = "copy_pane"
-	// hotkeyCopyInfo copies the preview pane's Repo / Path / Branch block
-	// (#791). It shipped hardcoded on "C"; that key now opens the context
-	// inspector, so this moved to "B" and became rebindable like everything
-	// else. Users who want the old key back set [hotkeys].copy_info = "C" and
-	// [hotkeys].context_inspector to something else.
+	// hotkeyCopyInfo opens the PREVIEW copy picker (fork patch 11): session ID,
+	// path, repo, branch, ... and an "All info" block, which is what #791's
+	// one-shot copy produced. Upstream moved that one-shot copy to "B" when its
+	// context inspector took "C". The fork keeps "C" for the picker, leaves "B"
+	// to Ask Aida (patch 19) and puts the context inspector on "Q" (Shift+Q; the
+	// only free capital: J/K reorder). All three stay rebindable under [hotkeys].
 	hotkeyCopyInfo = "copy_info"
 	// hotkeyContextInspector opens the full-context overlay: everything the
 	// harness is being sent, ranked by what it costs, with a lever per item.
@@ -194,8 +195,8 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyForkWithOptions:  "F",
 	hotkeyCopyOutput:       "c",
 	hotkeyCopyPane:         "V",
-	hotkeyCopyInfo:         "B",
-	hotkeyContextInspector: "C",
+	hotkeyCopyInfo:         "C",
+	hotkeyContextInspector: "Q",
 	hotkeySendOutput:       "x",
 	hotkeyExecShell:        "E",
 	hotkeyOpenShellHere:    "H",
@@ -227,6 +228,7 @@ var hotkeyActionDefaultTriggers = map[string][]string{
 	hotkeyQuit:            {"q", "ctrl+c"},
 	hotkeyForkWithOptions: {"F", "shift+f"},
 	hotkeyMoveToGroup:     {"M", "shift+m"},
+	hotkeyCopyInfo:        {"C", "shift+c"},
 	hotkeyWorktreeFinish:  {"W", "shift+w"},
 	hotkeyEditSession:     {"P", "shift+p"},
 }

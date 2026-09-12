@@ -2,19 +2,19 @@ package ui
 
 import "testing"
 
-// TestContextInspectorHotkeyRuling pins the hotkey relocation this feature
-// required: "C" opens the context inspector, and the preview-info copy it
-// displaced (#791) moved to "B". Both are rebindable actions rather than
+// TestContextInspectorHotkeyRuling pins the fork's layout (patch 11): "C"
+// stays on the preview copy picker (copy_info), "B" is Ask Aida (patch 19),
+// and the context inspector upstream put on "C" lives on "Q". Both are rebindable actions rather than
 // hardcoded switch literals, which is the repository's own convention and the
 // only way a user can put the old binding back.
 func TestContextInspectorHotkeyRuling(t *testing.T) {
 	bindings := resolveHotkeys(nil)
 
-	if got := bindings[hotkeyContextInspector]; got != "C" {
-		t.Errorf("default context_inspector binding = %q, want \"C\"", got)
+	if got := bindings[hotkeyContextInspector]; got != "Q" {
+		t.Errorf("default context_inspector binding = %q, want \"Q\"", got)
 	}
-	if got := bindings[hotkeyCopyInfo]; got != "B" {
-		t.Errorf("default copy_info binding = %q, want \"B\"", got)
+	if got := bindings[hotkeyCopyInfo]; got != "C" {
+		t.Errorf("default copy_info binding = %q, want \"C\"", got)
 	}
 
 	// The relocation must not disturb the rest of the copy family.
@@ -68,12 +68,12 @@ func TestContextInspectorHotkeyNormalization(t *testing.T) {
 	h := &Home{}
 	h.setHotkeys(resolveHotkeys(nil))
 
-	for _, pressed := range []string{"C", "shift+c"} {
+	for _, pressed := range []string{"Q", "shift+q"} {
 		if got := h.normalizeMainKey(pressed); got != defaultHotkeyBindings[hotkeyContextInspector] {
 			t.Errorf("%q normalized to %q, want %q", pressed, got, defaultHotkeyBindings[hotkeyContextInspector])
 		}
 	}
-	for _, pressed := range []string{"B", "shift+b"} {
+	for _, pressed := range []string{"C", "shift+c"} {
 		if got := h.normalizeMainKey(pressed); got != defaultHotkeyBindings[hotkeyCopyInfo] {
 			t.Errorf("%q normalized to %q, want %q", pressed, got, defaultHotkeyBindings[hotkeyCopyInfo])
 		}
@@ -83,12 +83,12 @@ func TestContextInspectorHotkeyNormalization(t *testing.T) {
 	if got := h.normalizeMainKey("ctrl+g"); got != defaultHotkeyBindings[hotkeyContextInspector] {
 		t.Errorf("rebound trigger normalized to %q, want the canonical %q", got, defaultHotkeyBindings[hotkeyContextInspector])
 	}
-	if got := h.normalizeMainKey("C"); got != "" {
+	if got := h.normalizeMainKey("Q"); got != "" {
 		t.Errorf("the vacated default key should be blocked after a rebind, got %q", got)
 	}
 
 	h.setHotkeys(resolveHotkeys(map[string]string{"context_inspector": ""}))
-	if got := h.normalizeMainKey("C"); got != "" {
+	if got := h.normalizeMainKey("Q"); got != "" {
 		t.Errorf("an unbound inspector must not dispatch, got %q", got)
 	}
 }

@@ -163,7 +163,7 @@ func TestHelpOverlayShowsCopySection(t *testing.T) {
 
 	for _, want := range []string{
 		"Copy last AI response",
-		"Copy session info (repo / path / branch)",
+		"Copy a preview value (ID / path / all info)",
 		"Copy visible terminal text, including links",
 		"Copy a fenced code block (picker if several)",
 	} {
