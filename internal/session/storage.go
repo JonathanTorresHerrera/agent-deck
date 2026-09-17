@@ -79,11 +79,16 @@ type InstanceData struct {
 	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
 	// HookLag mirrors Instance.hookLag (status-light audit defect B): the
 	// persisted completed-turn samples, extras zone (see hook_lag.go).
-	HookLag      hookLagRecord `json:"hook_lag,omitempty"`
-	ArchivedAt   time.Time     `json:"archived_at,omitempty"`
-	SupersededBy string        `json:"superseded_by,omitempty"`
-	Supersedes   string        `json:"supersedes,omitempty"`
-	TmuxSession  string        `json:"tmux_session"`
+	HookLag hookLagRecord `json:"hook_lag,omitempty"`
+	// LastPromptAt mirrors Instance.lastPromptAt (patch 12): durable
+	// turn-start evidence, persisted via the same tool_data extras zone (see
+	// last_prompt_persist.go). Zero means unknown (old record, a harness
+	// with no prompt edge, or never prompted).
+	LastPromptAt time.Time `json:"last_prompt_at,omitempty"`
+	ArchivedAt   time.Time `json:"archived_at,omitempty"`
+	SupersededBy string    `json:"superseded_by,omitempty"`
+	Supersedes   string    `json:"supersedes,omitempty"`
+	TmuxSession  string    `json:"tmux_session"`
 	// TmuxSocketName is the tmux -L selector captured at Instance creation
 	// (issue #687, v1.7.50). Empty for pre-v1.7.50 rows — those keep hitting
 	// the default server after upgrade.
@@ -1116,6 +1121,8 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	// timestamp badge and preview survive a TUI restart instead of
 	// collapsing back to CreatedAt/LastAccessedAt.
 	toolData = WriteLastActivityAtToToolData(toolData, inst.LastActivityAt())
+	// Patch 12: the restart-immune sibling rides the same save.
+	toolData = WriteLastPromptAtToToolData(toolData, inst.LastPromptAt())
 	// PR #1942 review (P1c): the DeepSeek headless task rides the same extras
 	// zone. For a one-shot the task IS the invocation, so a row that forgets it
 	// can only ever be "restarted" into dsh's usage error.
@@ -1297,6 +1304,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			GenericSessionLocation:    genericScopeLocation(r.ToolData),
 			LastActivityAt:            ReadLastActivityAtFromToolData(r.ToolData),
 			HookLag:                   ReadHookLagFromToolData(r.ToolData),
+			LastPromptAt:              ReadLastPromptAtFromToolData(r.ToolData),
 			DeepSeekTask:              ReadDeepSeekTaskFromToolData(r.ToolData),
 			SupersededBy:              ReadCrossHarnessSupersededByFromToolData(r.ToolData),
 			Supersedes:                ReadCrossHarnessSupersedesFromToolData(r.ToolData),
@@ -1436,6 +1444,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			GenericSessionLocation:    genericScopeLocation(r.ToolData),
 			LastActivityAt:            ReadLastActivityAtFromToolData(r.ToolData),
 			HookLag:                   ReadHookLagFromToolData(r.ToolData),
+			LastPromptAt:              ReadLastPromptAtFromToolData(r.ToolData),
 			DeepSeekTask:              ReadDeepSeekTaskFromToolData(r.ToolData),
 			SupersededBy:              ReadCrossHarnessSupersededByFromToolData(r.ToolData),
 			Supersedes:                ReadCrossHarnessSupersedesFromToolData(r.ToolData),
@@ -1750,14 +1759,18 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			hookLag:               instData.HookLag,
 			hookLagPersisted:      instData.HookLag,
 			hookLagDB:             s.db,
-			Sandbox:               instData.Sandbox,
-			SandboxContainer:      instData.SandboxContainer,
-			SSHHost:               instData.SSHHost,
-			SSHRemotePath:         instData.SSHRemotePath,
-			MultiRepoEnabled:      instData.MultiRepoEnabled,
-			AdditionalPaths:       instData.AdditionalPaths,
-			MultiRepoTempDir:      instData.MultiRepoTempDir,
-			tmuxSession:           tmuxSess,
+			// Patch 12: same reasoning — loaded from the DB means already
+			// persisted, so seed both sides of the write throttle.
+			lastPromptAt:        instData.LastPromptAt,
+			lastPromptPersisted: instData.LastPromptAt,
+			Sandbox:             instData.Sandbox,
+			SandboxContainer:    instData.SandboxContainer,
+			SSHHost:             instData.SSHHost,
+			SSHRemotePath:       instData.SSHRemotePath,
+			MultiRepoEnabled:    instData.MultiRepoEnabled,
+			AdditionalPaths:     instData.AdditionalPaths,
+			MultiRepoTempDir:    instData.MultiRepoTempDir,
+			tmuxSession:         tmuxSess,
 		}
 		// Restore configured detection without restarting the running harness.
 		inst.loadCustomPatternsFromConfig()
