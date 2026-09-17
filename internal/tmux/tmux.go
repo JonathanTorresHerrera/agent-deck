@@ -146,6 +146,31 @@ func SetStatusHints(detach, switchKey string, switchEnabled bool) {
 	switchHintEnabled = switchEnabled
 }
 
+// SetLastPromptStamp records the absolute wall-clock time of this session's
+// last prompt, for display in status-right. Patch 12 (C).
+//
+// An empty stamp renders nothing — that is the state of every session with no
+// durable prompt record yet (see last_prompt_persist.go), which on first run
+// is all of them. Safe to call on every attach; it replaces.
+//
+// Returns whether the value actually changed, so the attach path can skip a
+// redundant status-bar round trip when it did not.
+func (s *Session) SetLastPromptStamp(stamp string) bool {
+	s.lastPromptStampMu.Lock()
+	defer s.lastPromptStampMu.Unlock()
+	if s.lastPromptStamp == stamp {
+		return false
+	}
+	s.lastPromptStamp = stamp
+	return true
+}
+
+func (s *Session) lastPromptStampValue() string {
+	s.lastPromptStampMu.RLock()
+	defer s.lastPromptStampMu.RUnlock()
+	return s.lastPromptStamp
+}
+
 func (s *Session) themedStatusRight(themeStyle tmuxThemeStyle) string {
 	statusHintMu.RLock()
 	detach, switchKey, switchOn := detachHintLabel, switchHintLabel, switchHintEnabled
@@ -155,7 +180,23 @@ func (s *Session) themedStatusRight(themeStyle tmuxThemeStyle) string {
 	if switchOn {
 		hints += fmt.Sprintf(" · #[fg=%s]%s switch#[default]", themeStyle.hintColor, switchKey)
 	}
-	return fmt.Sprintf("%s │ 📁 %s | %s ", hints, s.DisplayName, s.projectDisplayName())
+
+	// Patch 12 (C): the last-prompt stamp sits HERE, between the hints and
+	// the session name, not appended at the end. tmux clips status-right at
+	// status-right-length from the right, so a trailing stamp would be the
+	// first casualty on a long session or project name — precisely on the
+	// busy decks where it matters most.
+	//
+	// Absolute time only: this is set once at attach and never refreshed, so
+	// a relative "3h ago" would be a lie within the hour. Once you are
+	// attached the recent activity is you anyway; the value is in knowing
+	// what you walked back into.
+	stamp := ""
+	if v := s.lastPromptStampValue(); v != "" {
+		stamp = fmt.Sprintf("│ #[fg=%s]prompt %s#[default] ", themeStyle.hintColor, v)
+	}
+
+	return fmt.Sprintf("%s %s│ 📁 %s | %s ", hints, stamp, s.DisplayName, s.projectDisplayName())
 }
 
 func (s *Session) projectDisplayName() string {
@@ -1095,10 +1136,17 @@ type Session struct {
 	// sync by the session layer (construction, reconnect, rename, regroup).
 	GroupPath    string
 	groupTitleMu sync.Mutex
-	Command      string
-	Created      time.Time
-	InstanceID   string // Agent-deck instance ID for hook callbacks
-	startupAt    time.Time
+
+	// lastPromptStamp is the attach-time absolute wall clock of this
+	// session's last prompt, rendered in status-right. Guarded by its own
+	// RWMutex rather than groupTitleMu so a status refresh never contends
+	// with title/group mutation. Patch 12 (C).
+	lastPromptStamp   string
+	lastPromptStampMu sync.RWMutex
+	Command           string
+	Created           time.Time
+	InstanceID        string // Agent-deck instance ID for hook callbacks
+	startupAt         time.Time
 
 	// WorkDirIsPlaceholder marks a session whose local WorkDir is not where the
 	// work happens — today that means an SSH session, whose pane only runs an
@@ -3071,7 +3119,12 @@ func (s *Session) buildStatusBarArgs() []string {
 		{"status-style", themeStyle.statusStyle},
 		{"status-left-length", "120"},
 		{"status-right", rightStatus},
-		{"status-right-length", "100"},
+		// Patch 12 (C) raised this from 100: status-right now also carries
+		// the last-prompt stamp (~20 cells). Without the bump the added
+		// segment would be paid for by truncating the project name. This is
+		// a MAX, not a reservation - tmux still never overflows the window,
+		// and a user [tmux].options entry still skips the key entirely.
+		{"status-right-length", "120"},
 	}
 
 	var args []string

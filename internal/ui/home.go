@@ -16434,10 +16434,34 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 		return nil
 	}
 
+	// Patch 13: stamp the last-prompt wall clock into status-right before
+	// the bar is built, so the answer to "when did I last work on this" is on
+	// screen the moment the pane appears — the only agent-deck chrome that
+	// survives an attach.
+	//
+	// Absolute, computed once here. A relative age would be stale within the
+	// hour and would need tmux #() interpolation to stay fresh, forking a
+	// shell per status tick per attached client.
+	promptStamp := ""
+	if promptAt := inst.LastPromptAt(); !promptAt.IsZero() {
+		promptStamp = promptAt.Local().Format("Jan 2 15:04")
+	}
+	alreadyConfigured := tmuxSess.IsConfigured()
+	stampChanged := tmuxSess.SetLastPromptStamp(promptStamp)
+
 	// PERFORMANCE: Ensure tmux session is configured on first attach
 	// This runs deferred ConfigureStatusBar, EnableMouseMode
 	// which were skipped during lazy loading for TUI startup performance
 	tmuxSess.EnsureConfigured()
+
+	// EnsureConfigured is a no-op once a session has been configured, so a
+	// re-attach needs an explicit refresh to pick up a stamp that moved since
+	// last time. Gated on both conditions to keep the attach path free of
+	// pointless tmux round trips — see the no-synchronous-save note below for
+	// why latency here is visible to the user as a blank screen.
+	if alreadyConfigured && stampChanged {
+		tmuxSess.ConfigureStatusBar()
+	}
 
 	// Sync session IDs to tmux environment for resume functionality
 	// (Deferred from load time for performance)
