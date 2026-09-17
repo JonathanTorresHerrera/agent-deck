@@ -1546,6 +1546,24 @@ func (s *StateDB) WriteLastActivityAt(id string, at time.Time) error {
 	})
 }
 
+// WriteLastPromptAt atomically merges last_prompt_at into one instance's
+// tool_data blob. Patch 12: the sibling of WriteLastActivityAt, carrying the
+// restart-immune turn-start record. json_set on a COALESCEd blob leaves every
+// other key (last_activity_at, claude_session_id, notes) untouched.
+func (s *StateDB) WriteLastPromptAt(id string, at time.Time) error {
+	return withBusyRetry(func() error {
+		_, err := s.db.Exec(
+			`UPDATE instances
+			   SET tool_data = json_set(
+			         COALESCE(tool_data, '{}'),
+			         '$.last_prompt_at', ?)
+			 WHERE id = ?`,
+			at.Unix(), id,
+		)
+		return err
+	})
+}
+
 // WriteLastAccessed atomically updates the last_accessed column for one
 // instance. MarkAccessed (#1846) uses this so each attach/detach is durable
 // on its own instead of waiting for a full saveInstances that may never run

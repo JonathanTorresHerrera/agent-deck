@@ -21207,12 +21207,29 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	}
 	confirmedTs, confirmedObserved := selected.LastObservedActivity()
 	activityTime := sessionActivityTime(selected.CreatedAt, selected.LastStartedAt, selected.LastActivityAt(), selected.LastAccessedAt, confirmedTs, confirmedObserved, previewHookStatus)
-	activityStr := formatRelativeTime(activityTime)
-	if selectedStatus == session.StatusRunning {
-		activityStr = "active now"
-	}
+	activityStr := formatActivityStamp(activityTime, selectedStatus == session.StatusRunning)
 	b.WriteString(infoStyle.Render("⏱ " + activityStr))
 	b.WriteString("\n")
+
+	// Patch 12 (B): the restart-immune companion. The ⏱ line above answers
+	// "when did anything happen here", which a fleet recovery inflates for
+	// every session it restarts (SessionStart is activity evidence). This one
+	// advances only on turn-start edges, so it answers "when was this last
+	// worked on" — the question an operator scanning a large deck is
+	// actually asking.
+	//
+	// Labelled "last prompt", not "you": `agent-deck session send` and
+	// anything relayed through agent-deck-mcp fire the same hook as a human
+	// typing, and the record cannot tell them apart.
+	//
+	// Hidden when unknown rather than shown as "unknown": every row predating
+	// this patch reads zero until its next prompt, and a deck-wide column of
+	// "unknown" is noise. Harnesses with no prompt edge (Hermes) stay blank
+	// permanently, which is honest.
+	if promptAt := selected.LastPromptAt(); !promptAt.IsZero() {
+		b.WriteString(infoStyle.Render("💬 last prompt: " + formatActivityStamp(promptAt, false)))
+		b.WriteString("\n")
+	}
 
 	toolBadge := lipgloss.NewStyle().
 		Foreground(ColorBg).
@@ -22554,6 +22571,33 @@ func formatRelativeTime(t time.Time) string {
 		return "unknown"
 	}
 	return humanizeSince(time.Since(t))
+}
+
+// formatActivityStamp renders a timestamp for the preview info lines as
+// "<relative> (<local wall clock>)" — the format patch 2 established in the
+// analytics panel.
+//
+// Patch 12 (A): the preview used to show the relative half alone, so the one
+// surface read before entering a session could say "3h 20m ago" but never
+// "Sep 16 14:32". On a deck of 100+ sessions the relative half answers "is
+// this stale", and only the clock answers "when was this".
+//
+// activeNow replaces the relative half for a running session but KEEPS the
+// clock. Replacing the entire string with "active now" is what hid the
+// timestamp on every running session.
+//
+// .Local() is load-bearing: hook and transcript timestamps are UTC, and
+// rendering them raw is the bug patch 2 fixed on the Started: line. A zero
+// time is "unknown" with no clock — never epoch.
+func formatActivityStamp(t time.Time, activeNow bool) string {
+	rel := formatRelativeTime(t)
+	if activeNow {
+		rel = "active now"
+	}
+	if t.IsZero() {
+		return rel
+	}
+	return rel + " (" + t.Local().Format("Jan 2 15:04") + ")"
 }
 
 // renderGroupPreview renders the preview pane for a group

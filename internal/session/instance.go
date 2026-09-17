@@ -574,6 +574,14 @@ type Instance struct {
 	lastActivityPersisted time.Time
 	lastActivityPersistMu sync.Mutex
 
+	// Durable last-PROMPT record (patch 12). Same mechanism as the
+	// last-activity trio above, different question: this one advances only
+	// on turn-start edges, so a fleet recovery (which fires SessionStart on
+	// every session) cannot inflate it. See last_prompt_persist.go.
+	lastPromptAt        time.Time
+	lastPromptPersisted time.Time
+	lastPromptPersistMu sync.Mutex
+
 	// restartTmuxRecordErr holds why the last restart could not record the
 	// tmux session name it minted, or nil once one did. Callers that have no
 	// other save on their path (the CLI --restart commands) read it through
@@ -6052,6 +6060,11 @@ func (i *Instance) UpdateStatus() error {
 			// #1846: a disk-read hook sample is activity evidence too.
 			// Flushed by this function's persistLastActivity defer.
 			i.noteAgentActivityLocked(hs.UpdatedAt)
+			// Patch 12: and it carries the event name, so a cold reader (the
+			// CLI, or the TUI before the watcher starts) recovers the prompt
+			// record from the same sample. Non-prompt events are ignored
+			// inside notePromptActivityLocked.
+			i.notePromptActivityLocked(hs.Event, hs.UpdatedAt)
 			i.setCodexGenerationEvidence(hs)
 			// Reset stale acknowledged flag from ReconnectSessionLazy.
 			// Without this, sessions loaded from SQLite with previousStatus="idle"
@@ -6526,8 +6539,15 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 	// released, then the throttled SQLite flush runs OUTSIDE it — the DB
 	// write can stall on SQLITE_BUSY and must not hold up i.mu readers.
 	defer i.persistLastActivity(false)
+	// Patch 12: the same treatment for the turn-start record. Reading the
+	// COMMITTED i.hookEvent (not the incoming status argument) is what makes
+	// the foreign-ephemeral reject below apply to this record too — a
+	// rejected candidate has already been restored by then, so its prompt is
+	// never credited here.
+	defer i.persistLastPrompt(false)
 	defer i.mu.Unlock()
 	defer func() { i.noteAgentActivityLocked(i.hookLastUpdate) }()
+	defer func() { i.notePromptActivityLocked(i.hookEvent, i.hookLastUpdate) }()
 
 	// Snapshot the prior hook-status fields so a candidate that fails the
 	// ownership check below can RESTORE them rather than leaving its status
@@ -6900,6 +6920,10 @@ func (i *Instance) ClearHookStatus() {
 	// session's last real activity, and the in-memory copy is zeroed right
 	// after. Fold it into the durable last-activity record first.
 	i.noteAgentActivityLocked(i.hookLastUpdate)
+	// Patch 12: the hook file is also the only durable trace of a prompt
+	// edge that has not yet passed the persist throttle. Fold it first, on
+	// the same reasoning, gated on the event actually being a prompt.
+	i.notePromptActivityLocked(i.hookEvent, i.hookLastUpdate)
 	i.hookStatus = ""
 	i.hookLastUpdate = time.Time{}
 	i.mu.Unlock()
@@ -6907,6 +6931,7 @@ func (i *Instance) ClearHookStatus() {
 	// this evidence has no other way to survive. Outside i.mu: the SQLite
 	// write can stall on SQLITE_BUSY (see persistLastActivity).
 	i.persistLastActivity(true)
+	i.persistLastPrompt(true)
 	if i.Tool == "hermes" {
 		i.clearHermesHookStatuses()
 		return
