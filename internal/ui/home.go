@@ -19684,7 +19684,10 @@ func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map
 	// The rule is partition-aware rather than archive-excluding: in the archived
 	// view (^) the header must count archived rows, because those are the rows
 	// underneath it. Same shape as SameArchivePartition in the reorder path.
-	viewArchived := h.statusFilter == FilterModeArchived
+	//
+	// The rule itself now lives in render_partition.go, shared with the group
+	// PREVIEW, which was left out of the original #1987 fix and drifted to
+	// reporting a different number for the same group (see patch 14).
 
 	for path, g := range h.groupTree.Groups {
 		if g == nil {
@@ -19695,7 +19698,7 @@ func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map
 		directRunning := 0
 		directWaiting := 0
 		for _, sess := range g.Sessions {
-			if sess.IsArchived() != viewArchived {
+			if !h.sessionInRenderedPartition(sess) {
 				continue
 			}
 			directSessions++
@@ -22628,6 +22631,12 @@ func formatActivityStamp(t time.Time, activeNow bool) string {
 func (h *Home) renderGroupPreview(group *session.Group, width, height int) string {
 	var b strings.Builder
 
+	// Patch 14: count and list the partition on screen, not the raw slice.
+	// group.Sessions holds active and archived rows together; reading it
+	// directly is what made this pane report `37 sessions` beside a sidebar
+	// reading `Vita-EHR (14)`. Same rule the header uses (#1987).
+	sessions := h.visibleGroupSessions(group)
+
 	// Group header with folder icon
 	headerStyle := lipgloss.NewStyle().
 		Foreground(ColorCyan).
@@ -22639,12 +22648,16 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 	countStyle := lipgloss.NewStyle().
 		Foreground(ColorText).
 		Bold(true)
-	b.WriteString(countStyle.Render(fmt.Sprintf("%d sessions", len(group.Sessions))))
+	b.WriteString(countStyle.Render(fmt.Sprintf("%d sessions", len(sessions))))
 	b.WriteString("\n\n")
 
 	// Status breakdown with inline badges
+	// Archiving does not reset Status and the status updater skips archived
+	// sessions (shouldPollStatusInLoop), so an archived row keeps whatever it
+	// was doing when it was archived, forever. Counting those here is what
+	// produced an error tally against a group with no reachable error rows.
 	running, waiting, idle, stopped, errored := 0, 0, 0, 0, 0
-	for _, sess := range group.Sessions {
+	for _, sess := range sessions {
 		switch sess.Status {
 		case session.StatusRunning:
 			running++
@@ -22729,7 +22742,7 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 	b.WriteString("\n")
 
 	// Session list (compact)
-	if len(group.Sessions) == 0 {
+	if len(sessions) == 0 {
 		emptyStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
 		b.WriteString(emptyStyle.Render("  No sessions in this group"))
 		b.WriteString("\n")
@@ -22738,9 +22751,9 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 		if maxShow < 3 {
 			maxShow = 3
 		}
-		for i, sess := range group.Sessions {
+		for i, sess := range sessions {
 			if i >= maxShow {
-				remaining := len(group.Sessions) - i
+				remaining := len(sessions) - i
 				b.WriteString(DimStyle.Render(fmt.Sprintf("  ... +%d more", remaining)))
 				break
 			}
@@ -22821,14 +22834,18 @@ type groupWorktreeInfo struct {
 // getGroupWorktreeInfo returns worktree summary if all sessions in the group
 // share the same repo root and at least one is a worktree. Returns nil otherwise.
 func (h *Home) getGroupWorktreeInfo(group *session.Group) *groupWorktreeInfo {
-	if len(group.Sessions) < 2 {
+	// Patch 14: the repo/worktree summary describes the rows being shown, so
+	// it reads the same partition as the rest of the pane. An archived row
+	// must not pull in a branch the view has no session for.
+	sessions := h.visibleGroupSessions(group)
+	if len(sessions) < 2 {
 		return nil
 	}
 
 	// Check if all sessions share a common repo root and count worktrees
 	var commonRepo string
 	var branches []groupWorktreeBranch
-	for _, sess := range group.Sessions {
+	for _, sess := range sessions {
 		if !sess.IsWorktree() {
 			continue
 		}
