@@ -30,7 +30,10 @@ func (h *Home) shouldRenderUpdateNudge() bool {
 // nudge applies. Every layout height computation must use this, not
 // shouldRenderUpdateNudge, so the list does not overlap the banner.
 func (h *Home) shouldRenderUpdateBanner() bool {
-	return h.binaryOrphanReason != "" || h.installedUpdateVersion() != "" || h.shouldRenderUpdateNudge()
+	return h.binaryOrphanReason != "" ||
+		h.installedUpdateVersion() != "" ||
+		h.binaryBuildChanged() ||
+		h.shouldRenderUpdateNudge()
 }
 
 // restartDeckKeyLabel is the key shown in the banner and status messages.
@@ -67,6 +70,13 @@ func (h *Home) renderUpdateBannerText() string {
 				v, hours, h.restartOverdueReason, h.restartDeckKeyLabel())
 		}
 		return fmt.Sprintf(" ⬆ v%s installed, restarting when idle (%s now) ", v, h.restartDeckKeyLabel())
+	}
+	// Patch 15: a rebuild of the same version. Says "build", not a version,
+	// because the version is identical and claiming an upgrade would be a
+	// lie. No auto-restart wording here either: this path never arms it.
+	if h.binaryBuildChanged() {
+		return fmt.Sprintf(" ⬆ A newer build of v%s is on disk — press %s to restart agent-deck into it ",
+			Version, h.restartDeckKeyLabel())
 	}
 	return h.renderUpdateNudgeText()
 }
