@@ -40,6 +40,19 @@ type binaryWatch struct {
 	// installedVersion is the newer version found on disk, or "" while the
 	// file still matches the running build (or was replaced by an older one).
 	installedVersion string
+
+	// startup is the fingerprint this process actually started from. Unlike
+	// probed (which advances to whatever was last examined) it never moves,
+	// so it can answer "is the file on disk a different build from the code
+	// I am running?" independently of the version string.
+	startup binaryFingerprint
+
+	// changedBuild is true when the file on disk is a DIFFERENT BUILD at the
+	// same (or older) version — the patched-fork case that installedVersion
+	// cannot see, because every build of a patch series reports one version.
+	// Mutually exclusive with installedVersion so the banner has exactly one
+	// thing to say. Patch 15.
+	changedBuild bool
 }
 
 // newBinaryWatch starts a watch that treats initial as the running build, so
@@ -49,6 +62,7 @@ func newBinaryWatch(execPath, runningVersion string, initial binaryFingerprint) 
 		execPath:       execPath,
 		runningVersion: runningVersion,
 		probed:         initial,
+		startup:        initial,
 	}
 }
 
@@ -92,9 +106,22 @@ func (w *binaryWatch) recordProbe(fp binaryFingerprint, version string, err erro
 	w.failures = 0
 	if update.CompareVersions(version, w.runningVersion) > 0 {
 		w.installedVersion = version
-	} else {
-		w.installedVersion = ""
+		w.changedBuild = false
+		return
 	}
+	w.installedVersion = ""
+	// Same version (or older) but a different file than this process started
+	// from: a rebuild of the same version, which the version comparison above
+	// cannot distinguish from "nothing happened". Restarting picks up
+	// different code, so the operator is told. Restoring the original file
+	// clears it again. Patch 15.
+	w.changedBuild = !fp.Equal(w.startup)
+}
+
+// buildChanged reports whether the file on disk is a different build of the
+// same version than the one this process is running.
+func (w *binaryWatch) buildChanged() bool {
+	return w != nil && w.changedBuild
 }
 
 // startBinaryWatch fingerprints the running executable at exe and starts
@@ -204,6 +231,15 @@ func (h *Home) installedUpdateVersion() string {
 		return ""
 	}
 	return h.binaryWatch.installedVersion
+}
+
+// binaryBuildChanged reports whether a different build of the SAME version is
+// on disk — the patched-fork case where the version string never moves, so
+// installedUpdateVersion stays empty and nothing would otherwise be said.
+// Read only by the banner: it deliberately does not reach maybeAutoRestart,
+// which stays gated on a real version upgrade. Patch 15.
+func (h *Home) binaryBuildChanged() bool {
+	return h.binaryWatch.buildChanged()
 }
 
 // setBinaryOrphanReason records the orphan state, logging each change.
