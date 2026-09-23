@@ -19211,24 +19211,10 @@ func (h *Home) renderHelpBarFull() string {
 		Bold(true)
 	contextLabel := ctxStyle.Render(contextTitle + ":")
 
-	// Build shortcuts line with visual grouping
-	var shortcutsLine string
-	shortcutsLine = strings.Join(primaryHints, " ")
-	if len(secondaryHints) > 0 {
-		shortcutsLine += sep + strings.Join(secondaryHints, " ")
-	}
-
-	// Reload indicator
-	var reloadIndicator string
-	h.reloadMu.Lock()
-	reloading := h.isReloading
-	h.reloadMu.Unlock()
-	if reloading {
-		reloadStyle := lipgloss.NewStyle().
-			Foreground(ColorYellow).
-			Bold(true)
-		reloadIndicator = reloadStyle.Render("⟳ Reloading...")
-	}
+	// No "⟳ Reloading..." indicator here. A storage reload fires every time any
+	// session writes state.db, which with a large fleet is several times a
+	// second; prepending a 17-column indicator for each one shoved the whole
+	// footer sideways and back, reading as a constant flicker.
 
 	// Global shortcuts (right side) - more compact with separators
 	globalStyle := lipgloss.NewStyle().Foreground(ColorComment)
@@ -19252,17 +19238,43 @@ func (h *Home) renderHelpBarFull() string {
 	}
 	globalHints := strings.Join(globalParts, sep)
 
-	// Calculate spacing between left (context) and right (global) portions
-	leftPart := contextLabel + " " + shortcutsLine
-	if reloadIndicator != "" {
-		leftPart = reloadIndicator + sep + leftPart
+	joinShortcuts := func(primary, secondary []string) string {
+		line := strings.Join(primary, " ")
+		if len(secondary) > 0 {
+			line += sep + strings.Join(secondary, " ")
+		}
+		return contextLabel + " " + line
 	}
+
+	// Calculate spacing between left (context) and right (global) portions
+	leftPart := joinShortcuts(primaryHints, secondaryHints)
 	rightPart := globalHints
 	padding := h.width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - spacingNormal
 	if padding < spacingNormal {
-		// Content too wide for one line — drop right part to avoid overflow
-		padding = spacingNormal
+		// Content too wide for one line: fall back to just the help key on the
+		// right, and drop whole hints from the right end (the edit group, then
+		// the tail of the primary group) until the rest fits. That keeps the
+		// same left-to-right priority MaxWidth truncation gave, without cutting
+		// the last hint mid-word or hiding help entirely.
 		rightPart = ""
+		if key := h.actionKey(hotkeyHelp); key != "" {
+			rightPart = globalStyle.Render(key + " Help")
+		}
+		for h.width > 0 && lipgloss.Width(leftPart)+spacingNormal+lipgloss.Width(rightPart) > h.width {
+			switch {
+			case len(secondaryHints) > 0:
+				secondaryHints = secondaryHints[:len(secondaryHints)-1]
+			case len(primaryHints) > 1:
+				primaryHints = primaryHints[:len(primaryHints)-1]
+			default:
+				rightPart = ""
+			}
+			leftPart = joinShortcuts(primaryHints, secondaryHints)
+			if len(primaryHints) <= 1 && len(secondaryHints) == 0 && rightPart == "" {
+				break
+			}
+		}
+		padding = max(spacingNormal, h.width-lipgloss.Width(leftPart)-lipgloss.Width(rightPart))
 	}
 
 	helpContent := leftPart + strings.Repeat(" ", padding) + rightPart
