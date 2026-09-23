@@ -20946,17 +20946,10 @@ func (h *Home) renderHelpBarFull() string {
 		Bold(true)
 	contextLabel := ctxStyle.Render(contextTitle + ":")
 
-	// Reload indicator
-	var reloadIndicator string
-	h.reloadMu.Lock()
-	reloading := h.isReloading
-	h.reloadMu.Unlock()
-	if reloading {
-		reloadStyle := lipgloss.NewStyle().
-			Foreground(ColorYellow).
-			Bold(true)
-		reloadIndicator = reloadStyle.Render("⟳ Reloading...")
-	}
+	// No "⟳ Reloading..." indicator here. A storage reload fires every time any
+	// session writes state.db, which with a large fleet is several times a
+	// second; prepending a 17-column indicator for each one shoved the whole
+	// footer sideways and back, reading as a constant flicker.
 
 	// Global shortcuts (right side) - more compact with separators. "↑↓ Nav"
 	// and Quit are pinned; the rest drop lowest-priority-first (from the end
@@ -20991,9 +20984,6 @@ func (h *Home) renderHelpBarFull() string {
 	}
 
 	leftPrefix := contextLabel
-	if reloadIndicator != "" {
-		leftPrefix = reloadIndicator + sep + leftPrefix
-	}
 
 	parts := fullFooterParts{
 		leftPrefix: leftPrefix,
