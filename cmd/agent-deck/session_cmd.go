@@ -426,6 +426,8 @@ func handleSessionStop(profile string, args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
+	graceful := fs.Bool("graceful", false, "Ask the agent to exit with its own exit command first (claude/codex: /exit, gemini: /quit) so its SessionEnd hooks run; kills after --graceful-timeout")
+	gracefulTimeout := fs.Duration("graceful-timeout", defaultGracefulTimeout, "How long --graceful waits for the agent to exit before killing it")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck session stop <id|title> [options]")
@@ -443,6 +445,12 @@ func handleSessionStop(profile string, args []string) {
 	identifier := fs.Arg(0)
 	quietMode := *quiet || *quietShort
 	out := NewCLIOutput(*jsonOutput, quietMode)
+	if *graceful {
+		if err := validateGracefulTimeout(*gracefulTimeout); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+	}
 
 	// Load sessions
 	storage, instances, groups, err := loadSessionData(profile)
@@ -474,8 +482,19 @@ func handleSessionStop(profile string, args []string) {
 	// Must happen before Kill() because tmux show-environment fails on dead sessions.
 	inst.SyncSessionIDsFromTmux()
 
-	// Stop the session by killing the tmux session
-	if err := inst.Kill(); err != nil {
+	var gracefulRes *gracefulStopResult
+	if *graceful {
+		r := gracefulStop(inst, *gracefulTimeout)
+		gracefulRes = &r
+	}
+
+	// Stop the session by killing the tmux session. After a graceful exit the
+	// pane is usually gone already; the teardown still runs (a missing tmux
+	// session is success) so markers, MCP children and status are handled the
+	// same way as a plain stop. KillAndWait, not Kill: this process exits right
+	// after, and Kill's SIGTERM->SIGKILL escalation runs in a goroutine that
+	// would die with it (see KillAndWait, issue #59).
+	if err := inst.KillAndWait(); err != nil {
 		out.Error(fmt.Sprintf("failed to stop session: %v", err), ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
@@ -502,7 +521,10 @@ func handleSessionStop(profile string, args []string) {
 		result["drained"] = drained.ID
 		result["drained_title"] = drained.Title
 	}
-	out.Success(fmt.Sprintf("Stopped session: %s", inst.Title), result)
+	if gracefulRes != nil {
+		result["graceful"] = gracefulRes
+	}
+	out.Success(fmt.Sprintf("Stopped session: %s%s", inst.Title, gracefulSummary(gracefulRes)), result)
 }
 
 // handleSessionArchive stops a session and marks it archived so it is hidden
@@ -513,6 +535,8 @@ func handleSessionArchive(profile string, args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
+	graceful := fs.Bool("graceful", false, "Ask the agent to exit with its own exit command before killing it (see session stop --graceful)")
+	gracefulTimeout := fs.Duration("graceful-timeout", defaultGracefulTimeout, "How long --graceful waits for the agent to exit before killing it")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck session archive <id|title> [options]")
@@ -530,6 +554,12 @@ func handleSessionArchive(profile string, args []string) {
 	identifier := fs.Arg(0)
 	quietMode := *quiet || *quietShort
 	out := NewCLIOutput(*jsonOutput, quietMode)
+	if *graceful {
+		if err := validateGracefulTimeout(*gracefulTimeout); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			os.Exit(1)
+		}
+	}
 
 	// An empty identifier is a usage error, not a missing session: exit 1 (not
 	// the ResolveSession NOT_FOUND exit 2, which is reserved for a genuinely
@@ -575,8 +605,15 @@ func handleSessionArchive(profile string, args []string) {
 	// non-targeted write that would reintroduce the archive-clobber race. The
 	// session's normal lifecycle already persists its tool ids.
 	killed := false
+	var gracefulRes *gracefulStopResult
 	if inst.Exists() {
-		if err := inst.Kill(); err != nil {
+		if *graceful {
+			r := gracefulStop(inst, *gracefulTimeout)
+			gracefulRes = &r
+		}
+		// KillAndWait: see handleSessionStop. After a graceful exit the pane is
+		// usually gone already, which Kill treats as success.
+		if err := inst.KillAndWait(); err != nil {
 			out.Error(fmt.Sprintf("failed to stop session: %v", err), ErrCodeInvalidOperation)
 			os.Exit(1)
 		}
@@ -589,12 +626,16 @@ func handleSessionArchive(profile string, args []string) {
 		os.Exit(1)
 	}
 
-	out.Success(fmt.Sprintf("Archived session: %s", inst.Title), map[string]interface{}{
+	archived := map[string]interface{}{
 		"success":  true,
 		"id":       inst.ID,
 		"title":    inst.Title,
 		"archived": true,
-	})
+	}
+	if gracefulRes != nil {
+		archived["graceful"] = gracefulRes
+	}
+	out.Success(fmt.Sprintf("Archived session: %s%s", inst.Title, gracefulSummary(gracefulRes)), archived)
 }
 
 // handleSessionUnarchive clears the archive flag without restarting tmux.
