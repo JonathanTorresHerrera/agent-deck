@@ -56,8 +56,9 @@ func TestRunGracefulExit_TypesExitAndWaitsForProcess(t *testing.T) {
 }
 
 func TestRunGracefulExit_PerAgentCommands(t *testing.T) {
+	panes := map[string]string{"claude": emptyClaudeComposer, "codex": "────────────────\n› \n────────────────\n", "gemini": ""}
 	for tool, want := range map[string]string{"claude": "/exit", "codex": "/exit", "gemini": "/quit"} {
-		target := &fakeExitTarget{pid: 1}
+		target := &fakeExitTarget{pid: 1, pane: panes[tool]}
 		clk, _ := fakeClock(0)
 		res := runGracefulExit(target, tool, time.Second, clk)
 		if res.Command != want || len(target.typed) != 1 || target.typed[0] != want {
@@ -93,6 +94,27 @@ func TestRunGracefulExit_NeverTypesIntoADraft(t *testing.T) {
 	}
 }
 
+func TestRunGracefulExit_NeverTypesIntoADialog(t *testing.T) {
+	// A Claude question/permission dialog without a ❯ line: no composer is
+	// visible, and Enter would pick whatever option is highlighted.
+	dialog := "Do you want to proceed?\n  1. Yes\n  2. No, and tell Claude what to do differently\n\nEsc to cancel\n"
+	for _, tool := range []string{"claude", "codex"} {
+		target := &fakeExitTarget{pane: dialog, pid: 7}
+		clk, _ := fakeClock(0)
+		res := runGracefulExit(target, tool, time.Second, clk)
+		if res.Attempted || !res.FellBack || len(target.typed) != 0 || !strings.Contains(res.Reason, "dialog") {
+			t.Fatalf("%s: dialog must block typing; got %+v typed=%v", tool, res, target.typed)
+		}
+	}
+	// Claude renders the highlighted dialog option with ❯, which the parser
+	// reads as composer text: that must also block typing.
+	target := &fakeExitTarget{pane: "Allow this command?\n❯ 1. Yes\n  2. No\n", pid: 7}
+	clk, _ := fakeClock(0)
+	if res := runGracefulExit(target, "claude", time.Second, clk); res.Attempted || len(target.typed) != 0 {
+		t.Fatalf("highlighted dialog option must block typing; got %+v", res)
+	}
+}
+
 func TestRunGracefulExit_UnreadablePaneFallsBack(t *testing.T) {
 	target := &fakeExitTarget{capErr: errors.New("capture timed out"), pid: 7}
 	clk, _ := fakeClock(0)
@@ -116,7 +138,7 @@ func TestRunGracefulExit_PIDOrTypeFailureFallsBack(t *testing.T) {
 	if res := runGracefulExit(&fakeExitTarget{pidErr: errors.New("no pane")}, "claude", time.Second, clk); res.Attempted || !res.FellBack {
 		t.Fatalf("pid failure: %+v", res)
 	}
-	if res := runGracefulExit(&fakeExitTarget{pid: 1, typeErr: errors.New("send-keys failed")}, "claude", time.Second, clk); res.Attempted || !res.FellBack {
+	if res := runGracefulExit(&fakeExitTarget{pid: 1, pane: emptyClaudeComposer, typeErr: errors.New("send-keys failed")}, "claude", time.Second, clk); res.Attempted || !res.FellBack || !strings.Contains(res.Reason, "could not type") {
 		t.Fatalf("type failure: %+v", res)
 	}
 }

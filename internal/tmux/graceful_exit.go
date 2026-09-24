@@ -34,6 +34,18 @@ func (s *Session) TypeCommand(command string) error {
 	return s.sendEnterRawToTarget(s.Name)
 }
 
+// ForgetCachedExistence drops this session from the shared liveness cache.
+// Exists() trusts a positive cache hit for sessionCacheTTL, and the CLI warms
+// that cache while loading sessions. An agent that exits on its own inside
+// that window would otherwise make the teardown's "already gone?" re-probe
+// answer "still exists", turning a clean graceful stop into a failed one.
+func (s *Session) ForgetCachedExistence() {
+	sessionCacheMu.Lock()
+	delete(sessionCacheData, s.Name)
+	sessionCacheMu.Unlock()
+	s.invalidateCache()
+}
+
 // PanePID returns the PID of the session's pane process from a live, bounded
 // probe. Agent sessions exec the agent as the pane process, so this PID
 // exiting is the agent exiting.

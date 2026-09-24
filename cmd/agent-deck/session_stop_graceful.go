@@ -31,6 +31,10 @@ var gracefulExitCommands = map[string]string{
 	"gemini": "/quit",
 }
 
+// composerRecognised lists agents whose input composer internal/send can
+// parse (Claude's ❯ and Codex's › prompt lines).
+var composerRecognised = map[string]bool{"claude": true, "codex": true}
+
 const (
 	defaultGracefulTimeout = 30 * time.Second
 	maxGracefulTimeout     = 5 * time.Minute
@@ -91,24 +95,39 @@ func runGracefulExit(t gracefulExitTarget, tool string, timeout time.Duration, c
 		return res
 	}
 	// Typing into a composer that holds an unsent draft would append the exit
-	// command to it and submit the result as a prompt. Never do that: fall back
-	// to the plain stop, which discards the draft without sending it. A pane we
+	// command to it and submit the result as a prompt. Fall back to the plain
+	// stop instead, which discards the draft without sending it. A pane we
 	// cannot read is treated the same way, since we cannot rule a draft out.
+	// This is a check, not a lock: an operator typing into the pane in the
+	// ~250ms between this capture and the Enter can still have their text
+	// submitted with the exit command appended. Nothing short of owning the
+	// terminal can close that window.
 	raw, err := t.CapturePaneFresh()
 	if err != nil {
 		res.FellBack, res.Reason = true, fmt.Sprintf("could not read the composer: %v", err)
 		return res
 	}
-	if send.ComposerHasDraft(raw, tmux.StripANSI) {
+	draft, visible := send.ComposerDraft(raw, tmux.StripANSI)
+	if visible && draft != "" {
 		res.FellBack, res.Reason = true, "composer holds an unsent draft; not typing into it"
 		return res
 	}
+	// No composer on screen means something else has the keyboard: a
+	// permission prompt, a question, a plan approval. Enter there picks the
+	// highlighted option, so typing the exit command could approve or answer
+	// something nobody did. Only agents whose composer we can recognise are
+	// held to this; for the others (gemini) the parser cannot tell.
+	if !visible && composerRecognised[tool] {
+		res.FellBack, res.Reason = true, "no empty composer on screen (a dialog may be open); not typing into it"
+		return res
+	}
+	// waited_ms runs from the keystrokes, so the typing delay is counted too.
+	start := clk.now()
 	if err := t.TypeCommand(command); err != nil {
 		res.FellBack, res.Reason = true, fmt.Sprintf("could not type %s: %v", command, err)
 		return res
 	}
 	res.Attempted = true
-	start := clk.now()
 	deadline := start.Add(timeout)
 	for {
 		if !clk.alive(pid) {
@@ -145,7 +164,13 @@ func gracefulStop(inst *session.Instance, timeout time.Duration) gracefulStopRes
 	if ts == nil {
 		return gracefulStopResult{FellBack: true, Reason: "session has no tmux pane"}
 	}
-	return runGracefulExit(ts, inst.Tool, timeout, realGracefulClock)
+	res := runGracefulExit(ts, inst.Tool, timeout, realGracefulClock)
+	if res.Attempted {
+		// The pane may now be gone while the liveness cache still says it
+		// exists; see ForgetCachedExistence.
+		ts.ForgetCachedExistence()
+	}
+	return res
 }
 
 // gracefulSummary is the human-readable suffix for a graceful stop.
