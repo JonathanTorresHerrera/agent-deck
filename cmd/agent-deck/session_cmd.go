@@ -426,7 +426,7 @@ func handleSessionStop(profile string, args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
-	graceful := fs.Bool("graceful", false, "Ask the agent to exit with its own exit command first (claude/codex: /exit, gemini: /quit) so its SessionEnd hooks run; kills after --graceful-timeout")
+	graceful := fs.Bool("graceful", false, "Ask the agent to exit with its own exit command first (claude/codex: /exit) so its SessionEnd hooks run; kills after --graceful-timeout, or at once when the composer cannot be verified empty (gemini)")
 	gracefulTimeout := fs.Duration("graceful-timeout", defaultGracefulTimeout, "How long --graceful waits for the agent to exit before killing it")
 
 	fs.Usage = func() {

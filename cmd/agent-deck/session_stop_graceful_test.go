@@ -56,8 +56,8 @@ func TestRunGracefulExit_TypesExitAndWaitsForProcess(t *testing.T) {
 }
 
 func TestRunGracefulExit_PerAgentCommands(t *testing.T) {
-	panes := map[string]string{"claude": emptyClaudeComposer, "codex": "────────────────\n› \n────────────────\n", "gemini": ""}
-	for tool, want := range map[string]string{"claude": "/exit", "codex": "/exit", "gemini": "/quit"} {
+	panes := map[string]string{"claude": emptyClaudeComposer, "codex": "────────────────\n› \n────────────────\n"}
+	for tool, want := range map[string]string{"claude": "/exit", "codex": "/exit"} {
 		target := &fakeExitTarget{pid: 1, pane: panes[tool]}
 		clk, _ := fakeClock(0)
 		res := runGracefulExit(target, tool, time.Second, clk)
@@ -112,6 +112,17 @@ func TestRunGracefulExit_NeverTypesIntoADialog(t *testing.T) {
 	clk, _ := fakeClock(0)
 	if res := runGracefulExit(target, "claude", time.Second, clk); res.Attempted || len(target.typed) != 0 {
 		t.Fatalf("highlighted dialog option must block typing; got %+v", res)
+	}
+}
+
+func TestRunGracefulExit_UnverifiableComposerFallsBack(t *testing.T) {
+	// Gemini's composer is not parsed, so an empty one cannot be told apart
+	// from one holding an operator draft: never type into it.
+	target := &fakeExitTarget{pane: "╭────╮\n│ > half-typed gemini draft │\n╰────╯\n", pid: 7}
+	clk, _ := fakeClock(0)
+	res := runGracefulExit(target, "gemini", time.Second, clk)
+	if res.Attempted || !res.FellBack || len(target.typed) != 0 || !strings.Contains(res.Reason, "cannot verify") {
+		t.Fatalf("unverifiable composer must not be typed into; got %+v typed=%v", res, target.typed)
 	}
 }
 

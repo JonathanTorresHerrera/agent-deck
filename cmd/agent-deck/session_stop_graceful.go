@@ -115,10 +115,15 @@ func runGracefulExit(t gracefulExitTarget, tool string, timeout time.Duration, c
 	// No composer on screen means something else has the keyboard: a
 	// permission prompt, a question, a plan approval. Enter there picks the
 	// highlighted option, so typing the exit command could approve or answer
-	// something nobody did. Only agents whose composer we can recognise are
-	// held to this; for the others (gemini) the parser cannot tell.
-	if !visible && composerRecognised[tool] {
-		res.FellBack, res.Reason = true, "no empty composer on screen (a dialog may be open); not typing into it"
+	// something nobody did. An agent whose composer we cannot parse at all
+	// (gemini) never shows one, so it falls back too: an unverified composer
+	// may hold an operator draft, and the rule is never to type into one.
+	if !visible {
+		if composerRecognised[tool] {
+			res.FellBack, res.Reason = true, "no empty composer on screen (a dialog may be open); not typing into it"
+		} else {
+			res.FellBack, res.Reason = true, fmt.Sprintf("cannot verify that the %s composer is empty; not typing into it", tool)
+		}
 		return res
 	}
 	// waited_ms runs from the keystrokes, so the typing delay is counted too.
