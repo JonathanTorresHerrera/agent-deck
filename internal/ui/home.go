@@ -1024,6 +1024,12 @@ type Home struct {
 	// session's active window; >= 0 targets that specific window. When nil, the
 	// dispatch calls the tmux session directly. See issue #1369.
 	quickApproveSink func(inst *session.Instance, windowIndex int) error
+	// Patch 19: Ask Aida (ask_aida.go). askAidaPending holds each session's
+	// unfinished ask (key + frozen request) until a terminal result;
+	// askAidaInFlight marks a script run in progress. Both are written only on
+	// the Update goroutine and created lazily.
+	askAidaPending  map[string]*askAidaPendingEntry
+	askAidaInFlight map[string]bool
 }
 
 // reloadState preserves UI state during storage reload
@@ -9607,6 +9613,15 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.setError(fmt.Errorf("%s", successMsg))
 		return h, hookCleanupCmd(cleanup, nil)
 
+	case askAidaSubmitMsg:
+		// Patch 19: Enter in the Ask Aida dialog.
+		return h, h.handleAskAidaSubmit(msg)
+
+	case askAidaResultMsg:
+		// Patch 19: one ask-aida.sh run finished.
+		h.applyAskAidaResult(msg)
+		return h, nil
+
 	case copyResultMsg:
 		switch {
 		case msg.err != nil:
@@ -12882,6 +12897,12 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return h, nil
+
+	case defaultHotkeyBindings[hotkeyAskAida]:
+		// Patch 19: ask Aida to check the highlighted session. A session row
+		// opens the note dialog (or retries a pending ask); a window sub-row
+		// asks about its parent session; a group row only explains itself.
+		return h, h.handleAskAidaKey()
 
 	case defaultHotkeyBindings[hotkeyCopyPane]:
 		// Copy the selected local session's current visible tmux pane. The key

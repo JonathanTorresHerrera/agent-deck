@@ -257,6 +257,7 @@ func (h *HelpOverlay) View() string {
 	yoloKey := h.key(hotkeyToggleYolo, "y")
 	copyInfoKey := h.key(hotkeyCopyInfo, "C")
 	contextInspectorKey := h.key(hotkeyContextInspector, "Q")
+	askAidaKey := h.key(hotkeyAskAida, "B") // Patch 19
 	sendKey := h.key(hotkeySendOutput, "x")
 	execShellKey := h.key(hotkeyExecShell, "E")
 	openShellHereKey := h.key(hotkeyOpenShellHere, "h")
@@ -369,6 +370,7 @@ func (h *HelpOverlay) View() string {
 				{forkKeys, "Fork session (Claude/Pi)"},
 				{yoloKey, "Toggle YOLO mode"},
 				{contextInspectorKey, "Inspect full context (everything the agent is being sent, ranked by cost)"},
+				{askAidaKey, "Ask Aida to check this session (optional note)"},
 				{sendKey, "Send output to session"},
 				{execShellKey, "Exec shell in sandbox container"},
 				{openShellHereKey, "Open shell in session's worktree (split pane / window)"},
