@@ -36,6 +36,7 @@ const (
 	hotkeyCopyOutput       = "copy_output"
 	hotkeyCopyPane         = "copy_pane"
 	hotkeyCopyInfo         = "copy_info" // opens the PREVIEW copy picker (session ID, path, ...)
+	hotkeyAskAida          = "ask_aida"  // Patch 19: ask Aida to check the highlighted session (ask_aida.go); "B" for bell, Shift+A is archive
 	hotkeySendOutput       = "send_output"
 	hotkeyExecShell        = "exec_shell"
 	hotkeyOpenShellHere    = "open_shell_here"
@@ -118,6 +119,7 @@ var hotkeyActionOrder = []string{
 	hotkeyCopyOutput,
 	hotkeyCopyPane,
 	hotkeyCopyInfo,
+	hotkeyAskAida, // Patch 19
 	hotkeySendOutput,
 	hotkeyExecShell,
 	hotkeyOpenShellHere,
@@ -170,6 +172,7 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyCopyOutput:       "c",
 	hotkeyCopyPane:         "V",
 	hotkeyCopyInfo:         "C",
+	hotkeyAskAida:          "B", // Patch 19
 	hotkeySendOutput:       "x",
 	hotkeyExecShell:        "E",
 	hotkeyOpenShellHere:    "H",
@@ -198,6 +201,7 @@ var hotkeyActionDefaultTriggers = map[string][]string{
 	hotkeyForkWithOptions: {"F", "shift+f"},
 	hotkeyMoveToGroup:     {"M", "shift+m"},
 	hotkeyCopyInfo:        {"C", "shift+c"},
+	hotkeyAskAida:         {"B", "shift+b"}, // Patch 19
 	hotkeyWorktreeFinish:  {"W", "shift+w"},
 	hotkeyEditSession:     {"P", "shift+p"},
 }

@@ -213,6 +213,7 @@ func (h *HelpOverlay) View() string {
 	copyKey := h.key(hotkeyCopyOutput, "c")
 	copyPaneKey := h.key(hotkeyCopyPane, "V")
 	copyInfoKey := h.key(hotkeyCopyInfo, "C")
+	askAidaKey := h.key(hotkeyAskAida, "B") // Patch 19
 	sendKey := h.key(hotkeySendOutput, "x")
 	execShellKey := h.key(hotkeyExecShell, "E")
 	openShellHereKey := h.key(hotkeyOpenShellHere, "h")
@@ -306,6 +307,7 @@ func (h *HelpOverlay) View() string {
 				{copyInfoKey, "Copy a preview value (Session ID / Path / Repo / Branch)"},
 				{"Y", "Copy a code block from output"},
 				{copyPaneKey, "Copy visible terminal text, including links"},
+				{askAidaKey, "Ask Aida to check this session (optional note)"},
 				{sendKey, "Send output to session"},
 				{execShellKey, "Exec shell in sandbox container"},
 				{openShellHereKey, "Open shell in session's worktree (split pane / window)"},

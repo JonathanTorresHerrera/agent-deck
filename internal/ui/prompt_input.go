@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -30,12 +31,24 @@ type PromptInputDialog struct {
 	height     int
 	instanceID string
 	title      string
+	// Patch 19: askAida switches the same one-line bar to the "Ask Aida"
+	// dialog. Enter then emits askAidaSubmitMsg — an empty line included, since
+	// empty means "send the default ask" — instead of promptSubmitMsg. Show
+	// and Hide reset it, so the prompt-session path never inherits the mode.
+	askAida bool
 }
+
+const (
+	promptInputPlaceholder = "Type a prompt and press Enter to send (Esc to cancel)…"
+	// Patch 19: the Ask Aida dialog's placeholder and hint line.
+	askAidaPlaceholder = "Optional note for Aida…"
+	askAidaHint        = "Enter send · Esc cancel · empty = default ask"
+)
 
 // NewPromptInputDialog creates the inline prompt input (hidden).
 func NewPromptInputDialog() *PromptInputDialog {
 	ti := textinput.New()
-	ti.Placeholder = "Type a prompt and press Enter to send (Esc to cancel)…"
+	ti.Placeholder = promptInputPlaceholder
 	ti.CharLimit = 2000
 	ti.Width = 60
 	return &PromptInputDialog{input: ti}
@@ -44,15 +57,29 @@ func NewPromptInputDialog() *PromptInputDialog {
 // Show opens the input targeting the given session and focuses it.
 func (d *PromptInputDialog) Show(instanceID, title string) {
 	d.visible = true
+	d.askAida = false
 	d.instanceID = instanceID
 	d.title = title
+	d.input.Placeholder = promptInputPlaceholder
 	d.input.SetValue("")
 	d.input.Focus()
 }
 
+// ShowAskAida opens the bar as the Ask Aida dialog for the given session.
+// Patch 19.
+func (d *PromptInputDialog) ShowAskAida(instanceID, title string) {
+	d.Show(instanceID, title)
+	d.askAida = true
+	d.input.Placeholder = askAidaPlaceholder
+}
+
+// IsAskAida reports whether the open bar is the Ask Aida dialog. Patch 19.
+func (d *PromptInputDialog) IsAskAida() bool { return d.IsVisible() && d.askAida }
+
 // Hide closes the input and blurs it.
 func (d *PromptInputDialog) Hide() {
 	d.visible = false
+	d.askAida = false
 	d.input.Blur()
 	d.instanceID = ""
 	d.title = ""
@@ -94,6 +121,13 @@ func (d *PromptInputDialog) Update(msg tea.KeyMsg) (*PromptInputDialog, tea.Cmd)
 	case "enter":
 		text := strings.TrimSpace(d.input.Value())
 		instanceID := d.instanceID
+		if d.askAida {
+			// Patch 19: an empty note is a real submit (the default ask).
+			d.Hide()
+			return d, func() tea.Msg {
+				return askAidaSubmitMsg{instanceID: instanceID, note: text}
+			}
+		}
 		if text == "" {
 			d.Hide()
 			return d, nil
@@ -124,13 +158,19 @@ func (d *PromptInputDialog) View(listBody string) string {
 		barWidth = d.width
 	}
 	label := "Prompt → " + d.title
+	hint := "Enter Send   Esc Cancel   (sends without attaching)"
+	if d.askAida {
+		// Patch 19
+		label = fmt.Sprintf("Ask Aida about %q", d.title)
+		hint = askAidaHint
+	}
 	bar := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorAccent).
 		Padding(0, 1).
 		Width(barWidth).
 		Render(labelStyle.Render(label) + "\n" + d.input.View() + "\n" +
-			dimStyle.Render("Enter Send   Esc Cancel   (sends without attaching)"))
+			dimStyle.Render(hint))
 
 	// Reserve space for the bar at the bottom: trim the list body so the
 	// composite stays within the viewport height.
