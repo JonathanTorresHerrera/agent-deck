@@ -30,6 +30,12 @@ func buildSessionInfoForCopy(inst *session.Instance) string {
 	if name := strings.TrimSpace(inst.Title); name != "" {
 		fmt.Fprintf(&b, "Name: %s\n", name)
 	}
+	// Patch 20: the Deck's own instance ID, right after the name. It is the
+	// exact key Aida's deck tools look a session up by; the "Session:" line
+	// below is the tool's (Claude/Codex/...) ID, a different thing.
+	if id := strings.TrimSpace(inst.ID); id != "" {
+		fmt.Fprintf(&b, "Deck ID: %s\n", id)
+	}
 
 	if inst.IsMultiRepo() {
 		b.WriteString("Paths:\n")
@@ -62,6 +68,16 @@ func buildSessionInfoForCopy(inst *session.Instance) string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// deckIDPreviewLine is the preview header's Deck ID line (patch 20), or "" when
+// the instance has no ID. Every tool section below prints the tool's own
+// session ID; this is the Deck's, shown once for every session type.
+func deckIDPreviewLine(inst *session.Instance) string {
+	if inst == nil || strings.TrimSpace(inst.ID) == "" {
+		return ""
+	}
+	return "🆔 Deck ID: " + strings.TrimSpace(inst.ID)
 }
 
 // copySessionInfo returns a tea.Cmd that copies the preview pane's

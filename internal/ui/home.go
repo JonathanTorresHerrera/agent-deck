@@ -21291,6 +21291,12 @@ func (h *Home) renderPreviewPane(width, height int) string {
 		b.WriteString("\n")
 	}
 
+	// Patch 20: the Deck's own ID (the tool's session ID is shown in its section below).
+	if line := deckIDPreviewLine(selected); line != "" {
+		b.WriteString(infoStyle.Render(line))
+		b.WriteString("\n")
+	}
+
 	toolBadge := lipgloss.NewStyle().
 		Foreground(ColorBg).
 		Background(ColorPurple).
