@@ -24,6 +24,13 @@ func buildSessionInfoForCopy(inst *session.Instance) string {
 
 	var b strings.Builder
 
+	// Patch 17: the session name leads the block. Without it a paste named
+	// the session only by an opaque UUID and a directory many sessions share.
+	// Skipped when blank, like the Session line below, so no dangling label.
+	if name := strings.TrimSpace(inst.Title); name != "" {
+		fmt.Fprintf(&b, "Name: %s\n", name)
+	}
+
 	if inst.IsMultiRepo() {
 		b.WriteString("Paths:\n")
 		for i, p := range inst.AllProjectPaths() {
