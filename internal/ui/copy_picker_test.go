@@ -150,11 +150,41 @@ func TestBuildCopyFields_SessionIDFirst(t *testing.T) {
 	if len(fields) == 0 {
 		t.Fatal("expected copyable fields")
 	}
-	if fields[0].label != "Session ID" {
-		t.Errorf("expected Session ID first, got %v", fieldLabels(fields))
+	// Patch 18: the full block is the top entry, so Shift+C then Enter copies
+	// everything; Session ID follows directly after it. Both stay reachable by
+	// their stable letters (a, i) regardless of position.
+	if fields[0].label != "All info (block)" {
+		t.Errorf("expected All info (block) first, got %v", fieldLabels(fields))
 	}
-	if fields[0].value != "7e60e581-5c76-4523-ae62-5de8741cd18c" {
-		t.Errorf("session ID value = %q, want the bare id with no label prefix", fields[0].value)
+	if fields[1].label != "Session ID" {
+		t.Errorf("expected Session ID second, got %v", fieldLabels(fields))
+	}
+	if fields[1].value != "7e60e581-5c76-4523-ae62-5de8741cd18c" {
+		t.Errorf("session ID value = %q, want the bare id with no label prefix", fields[1].value)
+	}
+	for i, f := range fields[1:] {
+		if f.label == "All info (block)" {
+			t.Errorf("All info (block) listed twice (again at %d): %v", i+1, fieldLabels(fields))
+		}
+	}
+}
+
+// Patch 18: Shift+C then Enter, with nothing else pressed, copies the block.
+func TestCopyPicker_EnterWithoutMovingCopiesTheBlock(t *testing.T) {
+	inst := &session.Instance{
+		Title:           "Agent-Deck",
+		ProjectPath:     "/home/jtorres",
+		Tool:            "claude",
+		ClaudeSessionID: "7e60e581-5c76-4523-ae62-5de8741cd18c",
+	}
+	d := NewCopyFieldPicker()
+	d.Show(inst)
+	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a selection command")
+	}
+	if msg := cmd().(copyFieldSelectedMsg); msg.value != buildSessionInfoForCopy(inst) {
+		t.Errorf("Enter copied %q=%q, want the full info block", msg.label, msg.value)
 	}
 }
 

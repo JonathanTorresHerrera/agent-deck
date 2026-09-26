@@ -19,7 +19,7 @@ import (
 // Every value rendered there — the session ID above all — is therefore
 // unreachable without a keyboard path. `C` used to copy one fixed multi-line
 // block; this picker makes each value individually copyable while keeping that
-// block as its last entry.
+// block as its first entry (patch 18), so Enter alone still copies it.
 type copyField struct {
 	label string
 	value string
@@ -75,6 +75,11 @@ func buildCopyFields(inst *session.Instance) []copyField {
 		addKeyed(label, value, copyFieldKeys[label])
 	}
 
+	// Patch 18: the full labelled block is the TOP entry, so Shift+C then
+	// Enter copies everything. Its "a" key is unchanged — accelerators are
+	// keyed by label, never position, so moving it costs no muscle memory.
+	add("All info (block)", buildSessionInfoForCopy(inst))
+
 	add("Session ID", inst.DisplaySessionID())
 	add("Name", inst.Title)
 
@@ -108,10 +113,6 @@ func buildCopyFields(inst *session.Instance) []copyField {
 	}
 
 	add("Notes", inst.Notes)
-
-	// The full labelled block — exactly what `C` copied before this picker
-	// existed, kept so the old muscle memory still has a destination.
-	add("All info (block)", buildSessionInfoForCopy(inst))
 
 	return fields
 }
