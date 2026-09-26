@@ -29,20 +29,29 @@ jobs:
 
       - name: Start test server
         run: |
-          env -u AGENTDECK_INSTANCE_ID -u TMUX -u TMUX_PANE -u TERM_PROGRAM \
-            AGENTDECK_PROFILE=_test \
-            ./build/agent-deck -p _test web \
-            --listen 127.0.0.1:18420 --token test &
+          # `agent-deck web` runs the TUI alongside the web server. Bubble Tea needs a
+          # terminal on stdin; the runner has none, so the process died with
+          # "error creating cancel reader: add reader to epoll interest list" and every
+          # test then failed with ERR_CONNECTION_REFUSED. `script` gives it a pty, and
+          # `sleep infinity |` keeps the pty's input open so the TUI never sees EOF.
+          sleep infinity | env -u AGENTDECK_INSTANCE_ID -u TMUX -u TMUX_PANE -u TERM_PROGRAM \
+            AGENTDECK_PROFILE=_test TERM=xterm-256color \
+            script -qfec "./build/agent-deck -p _test web --listen 127.0.0.1:18420 --token test" \
+            /dev/null > "$RUNNER_TEMP/agent-deck-web.log" 2>&1 &
           echo "TEST_SERVER_PID=$!" >> $GITHUB_ENV
 
-          # Wait for readiness
+          # Wait for readiness, and fail here (with the server log) instead of letting
+          # every Playwright test time out against a dead port.
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:18420/healthz > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
-              break
+              exit 0
             fi
             sleep 1
           done
+          echo "::error::agent-deck web did not become ready on 127.0.0.1:18420 within 30s"
+          tail -c 4000 "$RUNNER_TEMP/agent-deck-web.log" || true
+          exit 1
 
       - name: Pull Playwright Docker image
         run: docker pull mcr.microsoft.com/playwright:v1.59.1-jammy
@@ -69,4 +78,7 @@ jobs:
 
       - name: Stop test server
         if: always()
-        run: kill ${{ env.TEST_SERVER_PID }} 2>/dev/null || true
+        run: |
+          kill ${{ env.TEST_SERVER_PID }} 2>/dev/null || true
+          pkill -f "agent-deck -p _test web" 2>/dev/null || true
+          pkill -f "^sleep infinity$" 2>/dev/null || true
