@@ -81,3 +81,4 @@ jobs:
         run: |
           kill ${{ env.TEST_SERVER_PID }} 2>/dev/null || true
           pkill -f "agent-deck -p _test web" 2>/dev/null || true
+          pkill -f "^sleep infinity$" 2>/dev/null || true
