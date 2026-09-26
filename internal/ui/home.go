@@ -23469,6 +23469,12 @@ func (h *Home) renderPreviewPane(width, height int) string {
 		b.WriteString("\n")
 	}
 
+	// Patch 20: the Deck's own ID (the tool's session ID is shown in its section below).
+	if line := deckIDPreviewLine(selected); line != "" {
+		b.WriteString(infoStyle.Render(line))
+		b.WriteString("\n")
+	}
+
 	// Who else has this session open (shared attach), from the per-socket
 	// viewer cache so the render path never spawns tmux. A stopped session
 	// has no tmux to view, so the line is for live ones.
