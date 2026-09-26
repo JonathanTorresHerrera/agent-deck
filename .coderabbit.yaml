@@ -1,0 +1,190 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# agent-deck — standalone CodeRabbit config (WO-CODERABBIT-TUNE-01, JT GO 2026-09-25).
+# JonathanTorresHerrera/* repos do NOT inherit the devcodesgpt central config, so this file
+# mirrors devcodesgpt/coderabbit/.coderabbit.yaml (chill, tuned). Keep the two in sync.
+inheritance: false
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: false
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  poem: false
+  abort_on_close: true
+  auto_review:
+    enabled: true
+    drafts: false
+    # One review per PR. Re-run on demand with `@coderabbitai review`, never while rate-limited.
+    auto_incremental_review: false
+    auto_pause_after_reviewed_commits: 0
+    # Base branches OTHER than each repo's default branch (the default branch is always reviewed).
+    # main, develop and release/* are dropped: omni staging->main promotions re-reviewed
+    # already-reviewed code.
+    base_branches:
+      - staging
+      - trunk
+    # Bots, plus authors with no CodeRabbit seat (they only received "no seat" comments).
+    # Remove a login here if JT buys that author a seat.
+    ignore_usernames:
+      - "github-actions[bot]"
+      - "dependabot[bot]"
+      - "renovate[bot]"
+      - fabervita
+      - faberdatally
+      - faberpotent-bot
+      - faber-omni
+      - pyfection
+      - ibradevcode
+      - davelozanodevcodesgpt
+      - demi0129
+      - christianomongos-devcode
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/vendor/**"
+    - "!**/*.min.js"
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/pnpm-lock.yaml"
+    - "!**/*.lock"
+    - "!**/static/CACHE/**"
+    - "!**/*.pb.go"
+    - "!**/openapi.json"
+    - "!**/.planning/**"
+    - "!**/docs/**"
+    - "!**/scratchpad/**"
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Agent Deck (Go TUI, fork): no secrets in logs or configs; keep session lifecycle and tmux handling safe.
+        Report issues that would cause a bug, security hole, authz bypass, data loss, secret
+        exposure, or outage. Prefer failing closed over silent fallbacks.
+        Do not comment on documentation wording, test counts, naming, or style.
+        Do not flag credentials in test fixtures when the test uses force_authenticate or the
+        value is an obvious placeholder. One comment per root cause; no duplicates.
+  finishing_touches:
+    docstrings:
+      enabled: true
+    unit_tests:
+      enabled: true
+    autofix:
+      enabled: true
+    fix_ci:
+      enabled: true
+    resolve_merge_conflict:
+      enabled: true
+  pre_merge_checks:
+    override_requested_reviewers_only: false
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+    description:
+      mode: warning
+    issue_assessment:
+      mode: warning
+    custom_checks:
+      - name: no-secrets-committed
+        mode: error
+        instructions: |
+          FAIL if the PR introduces secrets, API keys, tokens, private keys, .env values,
+          or credentials in source, tests, docs, or config committed to the repo.
+          PASS only when no secret material is present (placeholders/docs that name env
+          vars without values are OK).
+      - name: tests-for-behavior-changes
+        mode: warning
+        instructions: |
+          If the PR changes runtime behavior (API, UI logic, data writes, auth, billing,
+          workflows), FAIL/warn unless it includes or clearly updates automated tests
+          covering the changed behavior. Docs-only and pure config PRs may PASS.
+  tools:
+    # Kept: security scanners and the primary linters.
+    eslint:
+      enabled: true
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+    actionlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    checkov:
+      enabled: true
+    hadolint:
+      enabled: true
+    sqlfluff:
+      enabled: true
+    squawk:
+      enabled: true
+    semgrep:
+      enabled: true
+    github-checks:
+      enabled: true
+    ast-grep:
+      enabled: true
+      essential_rules: true
+    osvScanner:
+      enabled: true
+    trivy:
+      enabled: true
+    dotenvLint:
+      enabled: true
+    prismaLint:
+      enabled: true
+    zizmor:
+      enabled: true
+    # Off: style-only or duplicated (biome ~ eslint, opengrep ~ semgrep).
+    yamllint:
+      enabled: false
+    markdownlint:
+      enabled: false
+    biome:
+      enabled: false
+    opengrep:
+      enabled: false
+    htmlhint:
+      enabled: false
+    stylelint:
+      enabled: false
+    reactDoctor:
+      enabled: false
+    presidio:
+      enabled: false
+    skillspector:
+      enabled: false
+
+chat:
+  # Each bot reply was an email to JT as PR author. Mention @coderabbitai to talk to it.
+  auto_reply: false
+  art: false
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns: []
+  learnings:
+    scope: auto
+    approval_delay: 0
+  pull_requests:
+    scope: auto
+  automatic_linking_mode: auto
