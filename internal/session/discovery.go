@@ -119,18 +119,45 @@ func FilterByQuery(instances []*Instance, query string) []*Instance {
 		return filterByStatus(instances, status)
 	}
 
-	// Regular fuzzy search on title, path, tool
+	// Substring search over every identifier an operator might paste.
 	filtered := make([]*Instance, 0)
 
 	for _, inst := range instances {
-		if strings.Contains(strings.ToLower(inst.Title), query) ||
-			strings.Contains(strings.ToLower(inst.ProjectPath), query) ||
-			strings.Contains(strings.ToLower(inst.Tool), query) {
+		if instanceMatchesQuery(inst, query) {
 			filtered = append(filtered, inst)
 		}
 	}
 
 	return filtered
+}
+
+// instanceMatchesQuery reports whether a lowercased query is a substring of
+// any searchable field. Patch 22: besides title, path and tool, the Deck ID,
+// every tool session ID (Claude, Codex, Gemini, OpenCode, generic), the
+// worktree path and the group path — so an ID copied from the preview or the
+// Shift+C block finds its session. Reported 2026-09-28.
+func instanceMatchesQuery(inst *Instance, query string) bool {
+	if inst == nil {
+		return false
+	}
+	for _, field := range []string{
+		inst.Title,
+		inst.ProjectPath,
+		inst.Tool,
+		inst.ID,
+		inst.ClaudeSessionID,
+		inst.CodexSessionID,
+		inst.GeminiSessionID,
+		inst.OpenCodeSessionID,
+		inst.DisplaySessionID(),
+		inst.WorktreePath,
+		inst.GroupPath,
+	} {
+		if field != "" && strings.Contains(strings.ToLower(field), query) {
+			return true
+		}
+	}
+	return false
 }
 
 // filterByStatus returns only instances with the specified status
