@@ -1564,6 +1564,27 @@ func (s *StateDB) WriteLastPromptAt(id string, at time.Time) error {
 	})
 }
 
+// WriteLastAidaAsk atomically sets tool_data.last_aida_ask to one JSON
+// object. Patch 21: the sibling of WriteLastPromptAt for the last `B` ask
+// that reached Aida's doorbell.
+//
+// json(?) makes SQLite store an object rather than a quoted string, and the
+// record is bound as TEXT (string(record)): a []byte would bind as a BLOB,
+// which json() rejects or reads as JSONB.
+func (s *StateDB) WriteLastAidaAsk(id string, record []byte) error {
+	return withBusyRetry(func() error {
+		_, err := s.db.Exec(
+			`UPDATE instances
+			   SET tool_data = json_set(
+			         COALESCE(tool_data, '{}'),
+			         '$.last_aida_ask', json(?))
+			 WHERE id = ?`,
+			string(record), id,
+		)
+		return err
+	})
+}
+
 // WriteLastAccessed atomically updates the last_accessed column for one
 // instance. MarkAccessed (#1846) uses this so each attach/detach is durable
 // on its own instead of waiting for a full saveInstances that may never run

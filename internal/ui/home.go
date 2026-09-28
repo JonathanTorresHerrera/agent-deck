@@ -8878,8 +8878,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case askAidaResultMsg:
 		// Patch 19: one ask-aida.sh run finished.
-		h.applyAskAidaResult(msg)
-		return h, nil
+		// Patch 21: the returned Cmd persists the last-ask record off the
+		// Update goroutine.
+		return h, h.applyAskAidaResult(msg)
 
 	case copyResultMsg:
 		switch {
@@ -21293,6 +21294,12 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Patch 20: the Deck's own ID (the tool's session ID is shown in its section below).
 	if line := deckIDPreviewLine(selected); line != "" {
+		b.WriteString(infoStyle.Render(line))
+		b.WriteString("\n")
+	}
+
+	// Patch 21: when Aida was last asked about this session (hidden without a record).
+	if line := lastAidaAskPreviewLine(selected); line != "" {
 		b.WriteString(infoStyle.Render(line))
 		b.WriteString("\n")
 	}

@@ -80,6 +80,24 @@ func deckIDPreviewLine(inst *session.Instance) string {
 	return "🆔 Deck ID: " + strings.TrimSpace(inst.ID)
 }
 
+// lastAidaAskPreviewLine is the preview header's "asked Aida" line (patch 21),
+// shown under the Deck ID line, or "" when the session has no last_aida_ask
+// record. Preview pane only — never on the list row.
+func lastAidaAskPreviewLine(inst *session.Instance) string {
+	if inst == nil {
+		return ""
+	}
+	rec, ok := inst.LastAidaAsk()
+	if !ok {
+		return ""
+	}
+	line := "🔔 asked Aida: " + formatActivityStamp(rec.At, false) + " — " + aidaAskWord(rec.Status)
+	if rec.Fallback {
+		line += " · #aida-ops fallback"
+	}
+	return line
+}
+
 // copySessionInfo returns a tea.Cmd that copies the preview pane's
 // session-info payload (#791) to the system clipboard, mirroring the
 // fallback chain used by copySessionOutput.

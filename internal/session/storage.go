@@ -81,10 +81,14 @@ type InstanceData struct {
 	// last_prompt_persist.go). Zero means unknown (old record, a harness
 	// with no prompt edge, or never prompted).
 	LastPromptAt time.Time `json:"last_prompt_at,omitempty"`
-	ArchivedAt   time.Time `json:"archived_at,omitempty"`
-	SupersededBy string    `json:"superseded_by,omitempty"`
-	Supersedes   string    `json:"supersedes,omitempty"`
-	TmuxSession  string    `json:"tmux_session"`
+	// LastAidaAsk mirrors Instance.lastAidaAsk (patch 21): the raw
+	// last_aida_ask object from the tool_data extras zone (see
+	// last_aida_ask.go). Nil means no record.
+	LastAidaAsk  json.RawMessage `json:"last_aida_ask,omitempty"`
+	ArchivedAt   time.Time       `json:"archived_at,omitempty"`
+	SupersededBy string          `json:"superseded_by,omitempty"`
+	Supersedes   string          `json:"supersedes,omitempty"`
+	TmuxSession  string          `json:"tmux_session"`
 	// TmuxSocketName is the tmux -L selector captured at Instance creation
 	// (issue #687, v1.7.50). Empty for pre-v1.7.50 rows — those keep hitting
 	// the default server after upgrade.
@@ -1072,6 +1076,10 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	toolData = WriteLastActivityAtToToolData(toolData, inst.LastActivityAt())
 	// Patch 12: the restart-immune sibling rides the same save.
 	toolData = WriteLastPromptAtToToolData(toolData, inst.LastPromptAt())
+	// Patch 21: the last Ask Aida record, written back raw so unknown fields
+	// survive. No record omits the key (never null), so MergeToolDataExtras
+	// keeps a record another process wrote after this snapshot loaded.
+	toolData = WriteLastAidaAskToToolData(toolData, inst.lastAidaAskRaw())
 	// PR #1942 review (P1c): the DeepSeek headless task rides the same extras
 	// zone. For a one-shot the task IS the invocation, so a row that forgets it
 	// can only ever be "restarted" into dsh's usage error.
@@ -1249,6 +1257,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			GenericSessionLocation:    genericScopeLocation(r.ToolData),
 			LastActivityAt:            ReadLastActivityAtFromToolData(r.ToolData),
 			LastPromptAt:              ReadLastPromptAtFromToolData(r.ToolData),
+			LastAidaAsk:               ReadLastAidaAskFromToolData(r.ToolData), // Patch 21
 			DeepSeekTask:              ReadDeepSeekTaskFromToolData(r.ToolData),
 			SupersededBy:              ReadCrossHarnessSupersededByFromToolData(r.ToolData),
 			Supersedes:                ReadCrossHarnessSupersedesFromToolData(r.ToolData),
@@ -1384,6 +1393,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			GenericSessionLocation:    genericScopeLocation(r.ToolData),
 			LastActivityAt:            ReadLastActivityAtFromToolData(r.ToolData),
 			LastPromptAt:              ReadLastPromptAtFromToolData(r.ToolData),
+			LastAidaAsk:               ReadLastAidaAskFromToolData(r.ToolData), // Patch 21
 			DeepSeekTask:              ReadDeepSeekTaskFromToolData(r.ToolData),
 			SupersededBy:              ReadCrossHarnessSupersededByFromToolData(r.ToolData),
 			Supersedes:                ReadCrossHarnessSupersedesFromToolData(r.ToolData),
@@ -1696,14 +1706,16 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			// persisted, so seed both sides of the write throttle.
 			lastPromptAt:        instData.LastPromptAt,
 			lastPromptPersisted: instData.LastPromptAt,
-			Sandbox:             instData.Sandbox,
-			SandboxContainer:    instData.SandboxContainer,
-			SSHHost:             instData.SSHHost,
-			SSHRemotePath:       instData.SSHRemotePath,
-			MultiRepoEnabled:    instData.MultiRepoEnabled,
-			AdditionalPaths:     instData.AdditionalPaths,
-			MultiRepoTempDir:    instData.MultiRepoTempDir,
-			tmuxSession:         tmuxSess,
+			// Patch 21: the last Ask Aida record, raw.
+			lastAidaAsk:      instData.LastAidaAsk,
+			Sandbox:          instData.Sandbox,
+			SandboxContainer: instData.SandboxContainer,
+			SSHHost:          instData.SSHHost,
+			SSHRemotePath:    instData.SSHRemotePath,
+			MultiRepoEnabled: instData.MultiRepoEnabled,
+			AdditionalPaths:  instData.AdditionalPaths,
+			MultiRepoTempDir: instData.MultiRepoTempDir,
+			tmuxSession:      tmuxSess,
 		}
 		// Convert multi-repo worktree data
 		for _, wt := range instData.MultiRepoWorktrees {

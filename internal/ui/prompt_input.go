@@ -36,6 +36,9 @@ type PromptInputDialog struct {
 	// empty means "send the default ask" — instead of promptSubmitMsg. Show
 	// and Hide reset it, so the prompt-session path never inherits the mode.
 	askAida bool
+	// Patch 21: "Already asked Aida …" shown above the input when the session
+	// has a last_aida_ask record. Empty = no line. Reset by Show and Hide.
+	askAidaWarning string
 }
 
 const (
@@ -58,6 +61,7 @@ func NewPromptInputDialog() *PromptInputDialog {
 func (d *PromptInputDialog) Show(instanceID, title string) {
 	d.visible = true
 	d.askAida = false
+	d.askAidaWarning = "" // Patch 21
 	d.instanceID = instanceID
 	d.title = title
 	d.input.Placeholder = promptInputPlaceholder
@@ -73,6 +77,15 @@ func (d *PromptInputDialog) ShowAskAida(instanceID, title string) {
 	d.input.Placeholder = askAidaPlaceholder
 }
 
+// SetAskAidaWarning sets the Ask Aida dialog's "already asked" line (empty
+// for none). Show and Hide clear it. Patch 21.
+func (d *PromptInputDialog) SetAskAidaWarning(line string) {
+	if d == nil {
+		return
+	}
+	d.askAidaWarning = line
+}
+
 // IsAskAida reports whether the open bar is the Ask Aida dialog. Patch 19.
 func (d *PromptInputDialog) IsAskAida() bool { return d.IsVisible() && d.askAida }
 
@@ -80,6 +93,7 @@ func (d *PromptInputDialog) IsAskAida() bool { return d.IsVisible() && d.askAida
 func (d *PromptInputDialog) Hide() {
 	d.visible = false
 	d.askAida = false
+	d.askAidaWarning = "" // Patch 21
 	d.input.Blur()
 	d.instanceID = ""
 	d.title = ""
@@ -159,17 +173,23 @@ func (d *PromptInputDialog) View(listBody string) string {
 	}
 	label := "Prompt → " + d.title
 	hint := "Enter Send   Esc Cancel   (sends without attaching)"
+	warning := ""
 	if d.askAida {
 		// Patch 19
 		label = fmt.Sprintf("Ask Aida about %q", d.title)
 		hint = askAidaHint
+		// Patch 21: the "already asked" line sits between the label and the
+		// input, in the warning color.
+		if d.askAidaWarning != "" {
+			warning = lipgloss.NewStyle().Foreground(ColorYellow).Render(d.askAidaWarning) + "\n"
+		}
 	}
 	bar := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorAccent).
 		Padding(0, 1).
 		Width(barWidth).
-		Render(labelStyle.Render(label) + "\n" + d.input.View() + "\n" +
+		Render(labelStyle.Render(label) + "\n" + warning + d.input.View() + "\n" +
 			dimStyle.Render(hint))
 
 	// Reserve space for the bar at the bottom: trim the list body so the

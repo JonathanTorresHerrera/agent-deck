@@ -582,6 +582,11 @@ type Instance struct {
 	lastPromptPersisted time.Time
 	lastPromptPersistMu sync.Mutex
 
+	// Patch 21: the last `B` ask that reached Aida's doorbell, kept as the
+	// raw stored object so unknown fields survive a save. Guarded by i.mu.
+	// See last_aida_ask.go.
+	lastAidaAsk json.RawMessage
+
 	// restartTmuxRecordErr holds why the last restart could not record the
 	// tmux session name it minted, or nil once one did. Callers that have no
 	// other save on their path (the CLI --restart commands) read it through
