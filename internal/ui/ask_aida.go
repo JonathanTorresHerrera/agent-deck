@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
+	"github.com/asheshgoplani/agent-deck/internal/statedb"
 )
 
 // askAidaScriptPath resolves the sender script. A package var so tests point
@@ -470,6 +472,8 @@ func (h *Home) handleAskAidaKey() tea.Cmd {
 		return nil
 	}
 	h.promptInputDialog.ShowAskAida(inst.ID, inst.Title)
+	// Patch 21: warn when this session was already asked.
+	h.promptInputDialog.SetAskAidaWarning(askAidaAlreadyAskedLine(inst, askAidaNow()))
 	return nil
 }
 
@@ -526,11 +530,96 @@ func (h *Home) sendAskAida(req askAidaRequest, title string, retry bool) tea.Cmd
 }
 
 // applyAskAidaResult updates the pending map and the status bar.
-func (h *Home) applyAskAidaResult(msg askAidaResultMsg) {
+//
+// Patch 21: an ask that reached the doorbell also records last_aida_ask. The
+// in-memory record is set here, on the Update goroutine, so the preview shows
+// it on the next render; the returned Cmd does the SQLite write, which can
+// stall for seconds under SQLITE_BUSY and so must not run on this goroutine.
+func (h *Home) applyAskAidaResult(msg askAidaResultMsg) tea.Cmd {
 	delete(h.askAidaInFlight, msg.deckID)
-	text, action := askAidaOutcome(msg, askAidaNow())
+	now := askAidaNow()
+	text, action := askAidaOutcome(msg, now)
 	if action == askAidaClearKey {
 		delete(h.askAidaPending, msg.deckID)
 	}
 	h.setError(fmt.Errorf("%s", text))
+
+	rec, ok := askAidaRecordFor(msg, now)
+	if !ok {
+		return nil
+	}
+	h.instancesMu.RLock()
+	inst := h.instanceByID[msg.deckID]
+	h.instancesMu.RUnlock()
+	if inst == nil {
+		return nil
+	}
+	record := inst.SetLastAidaAsk(rec)
+	id := inst.ID
+	return func() tea.Msg {
+		db := statedb.GetGlobal()
+		if db == nil {
+			return nil
+		}
+		if err := db.WriteLastAidaAsk(id, record); err != nil {
+			uiLog.Debug("last_aida_ask_persist_failed",
+				slog.String("instance", id),
+				slog.String("error", err.Error()),
+			)
+		}
+		return nil
+	}
+}
+
+// Patch 21: the hub statuses that mean the ask reached Aida's doorbell, and
+// the word each one shows in the preview and the dialog.
+var aidaAskWords = map[string]string{
+	"accepted": "notified",
+	"held":     "held until 7 AM",
+	"routed":   "logged, not delivered",
+}
+
+// aidaAskWord renders a recorded status. Patch 21.
+func aidaAskWord(status string) string {
+	if w, ok := aidaAskWords[status]; ok {
+		return w
+	}
+	return status
+}
+
+// askAidaRecordFor returns the last_aida_ask record for one script run, and
+// false for every outcome that did not reach the doorbell: a setup error, a
+// timeout, a script error, ok:false, and the refused / cooldown / in_progress
+// / indeterminate / failed statuses. Pure. Patch 21.
+//
+// Deliberately not derived from askAidaOutcome's key action: refused and
+// cooldown clear the key too, and neither rang anything.
+func askAidaRecordFor(msg askAidaResultMsg, now time.Time) (session.AidaAsk, bool) {
+	if msg.notSetUp != "" || msg.timedOut || msg.runErr != nil || !msg.result.OK {
+		return session.AidaAsk{}, false
+	}
+	res := msg.result
+	status := string(res.Status)
+	if _, ok := aidaAskWords[status]; !ok {
+		return session.AidaAsk{}, false
+	}
+	channel := ""
+	if strings.TrimSpace(string(res.BusProject)) != "" || strings.TrimSpace(strings.TrimPrefix(string(res.BusChannel), "#")) != "" {
+		channel = askAidaChannelLabel(string(res.BusProject), string(res.BusChannel))
+	}
+	return session.NewAidaAsk(now, status, string(res.Ref), channel, bool(res.Fallback)), true
+}
+
+// askAidaAlreadyAskedLine is the `B` dialog's warning for a session that has
+// a record, or "" without one. Patch 21.
+func askAidaAlreadyAskedLine(inst *session.Instance, now time.Time) string {
+	if inst == nil {
+		return ""
+	}
+	rec, ok := inst.LastAidaAsk()
+	if !ok {
+		return ""
+	}
+	return "Already asked Aida " + humanizeSince(now.Sub(rec.At)) +
+		" (" + aidaAskWord(rec.Status) + ") — Enter asks again"
 }
