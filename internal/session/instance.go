@@ -7911,8 +7911,9 @@ func resolveClaudeTranscriptPath(configDir, projectPath, sessionID string) strin
 	// Fallback: the transcript may live under a differently-encoded directory name
 	// (notably WSL Linux path vs. Windows/UNC cwd). Locate it by its unique
 	// session-id filename. A UUID contains no glob metacharacters.
-	if matches, err := filepath.Glob(filepath.Join(projectsDir, "*", sessionID+".jsonl")); err == nil && len(matches) > 0 {
-		return matches[0]
+	// Patch 26: one shared index instead of a Glob per call (transcript_index.go).
+	if p := lookupTranscriptByID(projectsDir, sessionID); p != "" {
+		return p
 	}
 
 	return ""
