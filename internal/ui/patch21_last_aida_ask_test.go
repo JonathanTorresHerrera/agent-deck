@@ -264,11 +264,13 @@ func TestPatch21_PreviewLineText(t *testing.T) {
 		fallback bool
 		want     string
 	}{
-		{"accepted", false, "🔔 asked Aida: " + stamp + " — notified"},
-		{"held", false, "🔔 asked Aida: " + stamp + " — held until 7 AM"},
+		// Patch 24: accepted/held asks with a ref now also say they are
+		// waiting for a reply (patch24_aida_answered_test.go covers the rest).
+		{"accepted", false, "🔔 asked Aida: " + stamp + " — notified · waiting for reply"},
+		{"held", false, "🔔 asked Aida: " + stamp + " — held until 7 AM · waiting for reply"},
 		{"routed", false, "🔔 asked Aida: " + stamp + " — logged, not delivered"},
-		{"accepted", true, "🔔 asked Aida: " + stamp + " — notified · #aida-ops fallback"},
-		{"held", true, "🔔 asked Aida: " + stamp + " — held until 7 AM · #aida-ops fallback"},
+		{"accepted", true, "🔔 asked Aida: " + stamp + " — notified · waiting for reply · #aida-ops fallback"},
+		{"held", true, "🔔 asked Aida: " + stamp + " — held until 7 AM · waiting for reply · #aida-ops fallback"},
 	}
 	for _, tc := range cases {
 		inst := session.NewInstanceWithTool("p21", "/tmp", "claude")
@@ -318,7 +320,8 @@ func TestPatch21_DialogWarnsWhenAlreadyAsked(t *testing.T) {
 	home, inst := armAskAidaHome(t)
 	inst.SetLastAidaAsk(session.NewAidaAsk(now.Add(-10*time.Minute), "held", "ring-1", "", false))
 
-	want := "Already asked Aida " + humanizeSince(10*time.Minute) + " (held until 7 AM) — Enter asks again"
+	// Patch 24: an unanswered held ask adds ", no reply yet".
+	want := "Already asked Aida " + humanizeSince(10*time.Minute) + " (held until 7 AM), no reply yet — Enter asks again"
 	if got := askAidaAlreadyAskedLine(inst, now); got != want {
 		t.Errorf("warning line:\n got  %q\n want %q", got, want)
 	}

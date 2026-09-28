@@ -11,8 +11,9 @@
 //	 "channel": "<busProject/#busChannel>", "fallback": <bool>}
 //
 // The object is kept raw in memory and only the keys above are merged into
-// it, so fields this binary does not know (a future "answered_at") survive a
-// load -> save round trip. A NEW ask starts a fresh object on purpose: an
+// it, so fields this binary does not know survive a load -> save round trip.
+// Patch 24 adds "answered_at" (unix s), set when ask-aida.sh --status reports
+// that Aida acked the ring. A NEW ask starts a fresh object on purpose: an
 // "answered_at" belonging to the previous ask must not mark this one
 // answered.
 //
@@ -38,7 +39,41 @@ type AidaAsk struct {
 	Ref      string
 	Channel  string
 	Fallback bool
-	raw      json.RawMessage
+	// Patch 24: when the deck saw Aida answer the ring (zero = unanswered).
+	AnsweredAt time.Time
+	raw        json.RawMessage
+}
+
+// AidaAskReplyWindow is how long an unanswered ask counts as waiting for a
+// reply (row marker, preview/dialog wording, status polling). Patch 24.
+const AidaAskReplyWindow = 48 * time.Hour
+
+// Answered returns when Aida answered, and false while unanswered. Patch 24.
+func (a AidaAsk) Answered() (time.Time, bool) {
+	return a.AnsweredAt, !a.AnsweredAt.IsZero()
+}
+
+// IsAnswered reports whether answered_at is set. Patch 24.
+func (a AidaAsk) IsAnswered() bool { return !a.AnsweredAt.IsZero() }
+
+// WithAnswered returns a copy marked answered at t; JSON() merges it into the
+// stored object, keeping every other field. Patch 24.
+func (a AidaAsk) WithAnswered(t time.Time) AidaAsk {
+	a.AnsweredAt = time.Unix(t.Unix(), 0).UTC()
+	return a
+}
+
+// AwaitingReply reports an ask that rang Aida (accepted or held — never
+// routed), has a ref, is unanswered and is younger than AidaAskReplyWindow.
+// Patch 24.
+func (a AidaAsk) AwaitingReply(now time.Time) bool {
+	if a.Status != "accepted" && a.Status != "held" {
+		return false
+	}
+	if strings.TrimSpace(a.Ref) == "" || a.IsAnswered() || a.At.IsZero() {
+		return false
+	}
+	return now.Sub(a.At) < AidaAskReplyWindow
 }
 
 // NewAidaAsk builds a fresh record (no inherited unknown fields).
@@ -62,6 +97,11 @@ func (a AidaAsk) JSON() json.RawMessage {
 	put("ref", a.Ref)
 	put("channel", a.Channel)
 	put("fallback", a.Fallback)
+	// Patch 24: written only when set, so an unparseable stored value is
+	// left exactly as it was.
+	if !a.AnsweredAt.IsZero() {
+		put("answered_at", a.AnsweredAt.Unix())
+	}
 	out, _ := json.Marshal(m)
 	return out
 }
@@ -84,13 +124,33 @@ func ParseAidaAsk(raw json.RawMessage) (AidaAsk, bool) {
 		return AidaAsk{}, false
 	}
 	return AidaAsk{
-		At:       time.Unix(v.At, 0).UTC(),
-		Status:   strings.TrimSpace(v.Status),
-		Ref:      v.Ref,
-		Channel:  v.Channel,
-		Fallback: v.Fallback,
-		raw:      append(json.RawMessage(nil), trimmed...),
+		At:         time.Unix(v.At, 0).UTC(),
+		Status:     strings.TrimSpace(v.Status),
+		Ref:        v.Ref,
+		Channel:    v.Channel,
+		Fallback:   v.Fallback,
+		AnsweredAt: parseAidaAnsweredAt(trimmed),
+		raw:        append(json.RawMessage(nil), trimmed...),
 	}, true
+}
+
+// parseAidaAnsweredAt reads answered_at on its own, so a malformed value
+// means "unanswered" rather than failing the whole record. Only a positive
+// integer counts. Patch 24.
+func parseAidaAnsweredAt(obj json.RawMessage) time.Time {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(obj, &m); err != nil {
+		return time.Time{}
+	}
+	raw, ok := m["answered_at"]
+	if !ok {
+		return time.Time{}
+	}
+	var sec int64
+	if err := json.Unmarshal(raw, &sec); err != nil || sec <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
 }
 
 // ReadLastAidaAskFromToolData returns the stored object, or nil when the row
@@ -153,4 +213,21 @@ func (i *Instance) SetLastAidaAsk(a AidaAsk) json.RawMessage {
 	i.lastAidaAsk = out
 	i.mu.Unlock()
 	return out
+}
+
+// MarkLastAidaAskAnswered sets answered_at = at on the stored record, but only
+// when it is still the ask with this ref and not already answered: a new `B`
+// ask that replaced the record while its predecessor's ring was being checked
+// must stay unanswered. Returns the object to persist, and false when nothing
+// changed. No I/O. Patch 24.
+func (i *Instance) MarkLastAidaAskAnswered(ref string, at time.Time) (json.RawMessage, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	rec, ok := ParseAidaAsk(i.lastAidaAsk)
+	if !ok || rec.Ref != ref || strings.TrimSpace(ref) == "" || rec.IsAnswered() {
+		return nil, false
+	}
+	out := rec.WithAnswered(at).JSON()
+	i.lastAidaAsk = out
+	return out, true
 }

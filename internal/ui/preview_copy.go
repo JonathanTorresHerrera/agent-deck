@@ -82,7 +82,8 @@ func deckIDPreviewLine(inst *session.Instance) string {
 
 // lastAidaAskPreviewLine is the preview header's "asked Aida" line (patch 21),
 // shown under the Deck ID line, or "" when the session has no last_aida_ask
-// record. Preview pane only — never on the list row.
+// record. The list row shows only patch 24's 🔔 marker, and only while the
+// ask is unanswered.
 func lastAidaAskPreviewLine(inst *session.Instance) string {
 	if inst == nil {
 		return ""
@@ -91,7 +92,18 @@ func lastAidaAskPreviewLine(inst *session.Instance) string {
 	if !ok {
 		return ""
 	}
-	line := "🔔 asked Aida: " + formatActivityStamp(rec.At, false) + " — " + aidaAskWord(rec.Status)
+	// Patch 24: an answered ask leads with the answer; an unanswered one that
+	// rang Aida says it is still waiting.
+	var line string
+	if answeredAt, answered := rec.Answered(); answered {
+		line = "✅ Aida answered: " + formatActivityStamp(answeredAt, false) +
+			" (asked " + formatRelativeTime(rec.At) + ")"
+	} else {
+		line = "🔔 asked Aida: " + formatActivityStamp(rec.At, false) + " — " + aidaAskWord(rec.Status)
+		if rec.AwaitingReply(askAidaNow()) {
+			line += " · waiting for reply"
+		}
+	}
 	if rec.Fallback {
 		line += " · #aida-ops fallback"
 	}
