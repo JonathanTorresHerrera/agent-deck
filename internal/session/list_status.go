@@ -13,6 +13,15 @@ func CLIStatusCandidates(instances []*Instance) ([]*Instance, map[*Instance]bool
 		if inst == nil {
 			continue
 		}
+		// Fork patch 25: an archived row keeps its stored status, whatever it is.
+		// Upstream caches only stopped rows, but 48 archived rows on the live
+		// deck are error/waiting, and each probe here also runs Substate(), which
+		// reaches the transcript glob. The TUI sweep skips archived rows for the
+		// same reason (shouldPollStatusInLoop).
+		if inst.IsArchived() {
+			cached[inst] = true
+			continue
+		}
 		if inst.Status != StatusStopped {
 			refresh = append(refresh, inst)
 			continue
