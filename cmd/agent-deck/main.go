@@ -2547,6 +2547,10 @@ func defaultListInstances(instances []*session.Instance) []*session.Instance {
 	return visible
 }
 
+// listUpdateStatus refreshes one row's status for `list --json`. A package var
+// so the patch 25 test can count which rows are probed.
+var listUpdateStatus = func(inst *session.Instance) { _ = inst.UpdateStatus() }
+
 // buildListJSON is the body of `list --json`: every session with its status
 // refreshed, as the indented array the CLI prints, trailing newline included.
 // handleList prints it and the remote agent's change probe (#2177) pushes it,
@@ -2588,7 +2592,12 @@ func buildListJSON(profileName string, instances []*session.Instance) ([]byte, e
 	}
 	sessions := make([]sessionJSON, len(instances))
 	for i, inst := range instances {
-		_ = inst.UpdateStatus()
+		// Patch 25: archived rows keep their stored status. Probing them cost a
+		// tmux subprocess or two each in a fresh CLI process and could not
+		// change anything (the TUI sweep skips them too: shouldPollStatusInLoop).
+		if !inst.IsArchived() {
+			listUpdateStatus(inst)
+		}
 		parentProjectPath := listParentProjectPath(inst, instances)
 		sj := sessionJSON{
 			ID:                inst.ID,
