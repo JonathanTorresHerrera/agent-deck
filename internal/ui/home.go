@@ -917,6 +917,12 @@ type Home struct {
 	// the Update goroutine and created lazily.
 	askAidaPending  map[string]*askAidaPendingEntry
 	askAidaInFlight map[string]bool
+	// Patch 24: answered-ask poller (ask_aida_status.go). All three are
+	// Update-goroutine only: the single in-flight flag, this tick's
+	// remaining checks, and the setup-error back-off deadline.
+	aidaStatusInFlight    bool
+	aidaStatusQueue       []aidaAskEntry
+	aidaStatusPausedUntil time.Time
 }
 
 // reloadState preserves UI state during storage reload
@@ -3795,6 +3801,7 @@ func (h *Home) Init() tea.Cmd {
 
 		h.tick(),
 		h.reviverTick(),
+		h.aidaStatusTick(), // Patch 24: answered-ask poller
 		h.requestUpdateCheck(time.Now()),
 		h.fetchRemoteSessions,
 		h.waitRemoteChange,
@@ -5486,6 +5493,11 @@ type sessionRenderState struct {
 	title          string // Instance.Title at snapshot time
 	autoName       bool   // session displays a captured/live task description
 	autoNameDesc   string // last persisted auto-name description (fallback when paneTitle empty)
+	// Patch 24: the parsed last_aida_ask, for the row's unanswered-ask marker
+	// and the status poller's candidates — read here so neither takes
+	// Instance.mu per row / per tick.
+	aidaAsk   session.AidaAsk
+	aidaAskOK bool
 }
 
 // displaySessionTitle returns the label to render for a session row. For an
@@ -5675,6 +5687,7 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 			autoName:     inst.GetAutoName(),
 			autoNameDesc: inst.GetAutoNameDescription(),
 		}
+		state.aidaAsk, state.aidaAskOK = inst.LastAidaAsk() // Patch 24
 		// Look up pane title from the already-refreshed tmux cache.
 		// Only RefreshPaneInfoCache (called from backgroundStatusUpdate) keeps
 		// the cache fresh; processStatusUpdate and other rebuild paths run on
@@ -5715,7 +5728,7 @@ func (h *Home) getSessionRenderState(inst *session.Instance) sessionRenderState 
 	// take Instance.mu (briefly, as a reader); it is bounded to sessions that a
 	// snapshot refresh has not seen yet, never the steady-state whole list.
 	account := inst.GetAccountThreadSafe()
-	return sessionRenderState{
+	state := sessionRenderState{
 		status:         inst.GetStatusThreadSafe(),
 		tool:           inst.GetToolThreadSafe(),
 		account:        account,
@@ -5724,6 +5737,8 @@ func (h *Home) getSessionRenderState(inst *session.Instance) sessionRenderState 
 		autoName:       inst.GetAutoName(),
 		autoNameDesc:   inst.GetAutoNameDescription(),
 	}
+	state.aidaAsk, state.aidaAskOK = inst.LastAidaAsk() // Patch 24
+	return state
 }
 
 // markNavigationActivity records a short "hot" window where background workers
@@ -8881,6 +8896,15 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Patch 21: the returned Cmd persists the last-ask record off the
 		// Update goroutine.
 		return h, h.applyAskAidaResult(msg)
+
+	case aidaStatusTickMsg:
+		// Patch 24: the only place the poller tick re-arms (one chain).
+		return h, tea.Batch(h.aidaStatusTick(), h.handleAidaStatusTick())
+
+	case aidaStatusResultMsg:
+		// Patch 24: one `ask-aida.sh --status` run finished.
+		persist, next := h.applyAidaStatusResult(msg)
+		return h, tea.Batch(persist, next)
 
 	case copyResultMsg:
 		switch {
@@ -20268,6 +20292,13 @@ func (h *Home) renderSessionItem(
 		agentBadge = agStyle.Render(" ⚙")
 	}
 
+	// Patch 24: 🔔 while a `B` ask is still waiting on Aida's reply
+	// (accepted/held, has a ref, unanswered, < 48 h). Gone once answered.
+	aidaBadge := ""
+	if instState.aidaAskOK && instState.aidaAsk.AwaitingReply(askAidaNow()) {
+		aidaBadge = " 🔔"
+	}
+
 	// Last-update timestamp badge — see pickBadgeTime for the formula.
 	// Selected rows reuse the selection-bar style instead of dim, so the
 	// badge stays legible inside the highlight.
@@ -20328,7 +20359,7 @@ func (h *Home) renderSessionItem(
 		cellWidth(status) + 1 + cellWidth(tool) +
 		cellWidth(maestroBadge) + cellWidth(yoloBadge) + cellWidth(worktreeBadge) +
 		cellWidth(sandboxBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
-		cellWidth(agentBadge) + cellWidth(timestampBadge)
+		cellWidth(agentBadge) + cellWidth(aidaBadge) + cellWidth(timestampBadge)
 	accountBudget := instState.accountDisplay.width
 	if listWidth > 0 {
 		accountBudget = min(accountBudget, max(0, listWidth-reserved-2))
@@ -20353,7 +20384,7 @@ func (h *Home) renderSessionItem(
 	// The leading gutter (leftGutterWidth) keeps sessions aligned with group
 	// rows, which reserve the same gutter for root hotkey numbers.
 	row := fmt.Sprintf(
-		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s",
 		strings.Repeat(" ", leftGutterWidth),
 		baseIndent,
 		selectionPrefix,
@@ -20369,6 +20400,7 @@ func (h *Home) renderSessionItem(
 		multiRepoBadge,
 		sshBadge,
 		agentBadge,
+		aidaBadge,
 		accountBadge,
 		timestampBadge,
 	)

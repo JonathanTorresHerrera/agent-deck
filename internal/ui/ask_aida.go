@@ -556,6 +556,10 @@ func (h *Home) applyAskAidaResult(msg askAidaResultMsg) tea.Cmd {
 	}
 	record := inst.SetLastAidaAsk(rec)
 	id := inst.ID
+	// Patch 24: the row's 🔔 appears now, not at the next snapshot refresh.
+	if parsed, ok := session.ParseAidaAsk(record); ok {
+		h.patchAidaAskInSnapshot(id, parsed, true)
+	}
 	return func() tea.Msg {
 		db := statedb.GetGlobal()
 		if db == nil {
@@ -620,6 +624,14 @@ func askAidaAlreadyAskedLine(inst *session.Instance, now time.Time) string {
 	if !ok {
 		return ""
 	}
+	// Patch 24: say whether Aida has answered.
+	if answeredAt, answered := rec.Answered(); answered {
+		return "Aida answered " + humanizeSince(now.Sub(answeredAt)) + " — Enter asks again"
+	}
+	waiting := ""
+	if rec.AwaitingReply(now) {
+		waiting = ", no reply yet"
+	}
 	return "Already asked Aida " + humanizeSince(now.Sub(rec.At)) +
-		" (" + aidaAskWord(rec.Status) + ") — Enter asks again"
+		" (" + aidaAskWord(rec.Status) + ")" + waiting + " — Enter asks again"
 }
