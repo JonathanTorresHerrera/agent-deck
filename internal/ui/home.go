@@ -9471,23 +9471,32 @@ func (h *Home) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		selected := h.search.Selected()
-		if selected != nil {
-			// Ensure the session's group AND all parent groups are expanded so it's visible
-			if selected.GroupPath != "" {
-				h.groupTree.ExpandGroupWithParents(selected.GroupPath)
+		if selected == nil {
+			// Patch 23: nothing to land on. Closing here looked like a failed
+			// jump; keep the query so it can be corrected.
+			if q := strings.TrimSpace(h.search.input.Value()); q != "" {
+				h.setError(fmt.Errorf("No session matches %q", q))
 			}
+			return h, nil
+		}
+		// Ensure the session's group AND all parent groups are expanded so it's visible
+		if selected.GroupPath != "" {
+			h.groupTree.ExpandGroupWithParents(selected.GroupPath)
+		}
+		h.rebuildFlatItems()
+		// Patch 23: a match hidden by the status, time or archive filter was
+		// never in flatItems, so the cursor silently stayed put. Clear only
+		// the filter that hides it and say so.
+		cleared := ""
+		if !h.cursorToSession(selected.ID) {
+			cleared = h.clearFiltersHiding(selected)
 			h.rebuildFlatItems()
-
-			// Find the session in flatItems (not instances) and set cursor
-			for i, item := range h.flatItems {
-				if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.ID == selected.ID {
-					h.cursor = i
-					h.syncViewport() // Ensure the cursor is visible in the viewport
-					break
-				}
-			}
+			h.cursorToSession(selected.ID)
 		}
 		h.search.Hide()
+		if cleared != "" {
+			h.setError(fmt.Errorf("Cleared the %s to show %q", cleared, selected.Title))
+		}
 		return h, nil
 	case "esc":
 		h.search.Hide()
@@ -9504,6 +9513,40 @@ func (h *Home) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return h, cmd
+}
+
+// cursorToSession moves the cursor to the session row with this ID and reports
+// whether it was found in the current flatItems (patch 23).
+func (h *Home) cursorToSession(id string) bool {
+	for i, item := range h.flatItems {
+		if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.ID == id {
+			h.cursor = i
+			h.syncViewport() // Ensure the cursor is visible in the viewport
+			return true
+		}
+	}
+	return false
+}
+
+// clearFiltersHiding clears the list filters that keep inst out of flatItems
+// and names them for the status bar (patch 23). An archived session switches
+// to the archived view instead of leaving it.
+func (h *Home) clearFiltersHiding(inst *session.Instance) string {
+	var names []string
+	if inst.IsArchived() {
+		if h.statusFilter != FilterModeArchived {
+			h.statusFilter = FilterModeArchived
+			names = append(names, "active view (switched to archived)")
+		}
+	} else if h.statusFilter != "" {
+		h.statusFilter = ""
+		names = append(names, "status filter")
+	}
+	if h.timeFilter != session.TimeFilterAll {
+		h.timeFilter = session.TimeFilterAll
+		names = append(names, "time filter")
+	}
+	return strings.Join(names, " and ")
 }
 
 // handleGlobalSearchKey handles keys when global search is visible
