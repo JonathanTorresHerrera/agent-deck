@@ -17,6 +17,12 @@
 // "answered_at" belonging to the previous ask must not mark this one
 // answered.
 //
+// Patch 27 adds "cleared_by", "clear_reason" and "note": the bell was marked
+// handled by hand (`agent-deck session clear-bell`, the MCP tool
+// deck_clear_notification, or Ctrl+X in the B dialog) rather than by the hub
+// seeing Aida's ack. A clear also sets answered_at, so every reader that only
+// knows patch 24 treats it as answered.
+//
 // Storage rides the same extras-zone mechanism as patch 12's last_prompt_at:
 // the key is not in statedb's toolDataBlob, so MergeToolDataExtras carries it
 // through legacy binaries' full saves, and legacy rows read as "no record".
@@ -41,7 +47,13 @@ type AidaAsk struct {
 	Fallback bool
 	// Patch 24: when the deck saw Aida answer the ring (zero = unanswered).
 	AnsweredAt time.Time
-	raw        json.RawMessage
+	// Patch 27: set when the bell was cleared by hand. ClearedBy names who
+	// ("aida", "jt", ...), ClearReason says how ("manual" or "message"), Note
+	// is optional free text. All empty for an ack seen on the hub.
+	ClearedBy   string
+	ClearReason string
+	Note        string
+	raw         json.RawMessage
 }
 
 // AidaAskReplyWindow is how long an unanswered ask counts as waiting for a
@@ -62,6 +74,25 @@ func (a AidaAsk) WithAnswered(t time.Time) AidaAsk {
 	a.AnsweredAt = time.Unix(t.Unix(), 0).UTC()
 	return a
 }
+
+// AidaAskNoteMax bounds a clear note in characters. Patch 27.
+const AidaAskNoteMax = 500
+
+// WithCleared returns a copy marked answered at t by hand. Patch 27.
+func (a AidaAsk) WithCleared(t time.Time, by, reason, note string) AidaAsk {
+	a = a.WithAnswered(t)
+	a.ClearedBy = strings.TrimSpace(by)
+	a.ClearReason = strings.TrimSpace(reason)
+	note = strings.TrimSpace(note)
+	if r := []rune(note); len(r) > AidaAskNoteMax {
+		note = string(r[:AidaAskNoteMax])
+	}
+	a.Note = note
+	return a
+}
+
+// IsCleared reports a bell cleared by hand rather than by Aida's ack. Patch 27.
+func (a AidaAsk) IsCleared() bool { return a.IsAnswered() && a.ClearedBy != "" }
 
 // AwaitingReply reports an ask that rang Aida (accepted or held — never
 // routed), has a ref, is unanswered and is younger than AidaAskReplyWindow.
@@ -102,6 +133,16 @@ func (a AidaAsk) JSON() json.RawMessage {
 	if !a.AnsweredAt.IsZero() {
 		put("answered_at", a.AnsweredAt.Unix())
 	}
+	// Patch 27: written only when set, like answered_at.
+	if a.ClearedBy != "" {
+		put("cleared_by", a.ClearedBy)
+	}
+	if a.ClearReason != "" {
+		put("clear_reason", a.ClearReason)
+	}
+	if a.Note != "" {
+		put("note", a.Note)
+	}
 	out, _ := json.Marshal(m)
 	return out
 }
@@ -124,14 +165,31 @@ func ParseAidaAsk(raw json.RawMessage) (AidaAsk, bool) {
 		return AidaAsk{}, false
 	}
 	return AidaAsk{
-		At:         time.Unix(v.At, 0).UTC(),
-		Status:     strings.TrimSpace(v.Status),
-		Ref:        v.Ref,
-		Channel:    v.Channel,
-		Fallback:   v.Fallback,
-		AnsweredAt: parseAidaAnsweredAt(trimmed),
-		raw:        append(json.RawMessage(nil), trimmed...),
+		At:          time.Unix(v.At, 0).UTC(),
+		Status:      strings.TrimSpace(v.Status),
+		Ref:         v.Ref,
+		Channel:     v.Channel,
+		Fallback:    v.Fallback,
+		AnsweredAt:  parseAidaAnsweredAt(trimmed),
+		ClearedBy:   parseAidaAskString(trimmed, "cleared_by"),
+		ClearReason: parseAidaAskString(trimmed, "clear_reason"),
+		Note:        parseAidaAskString(trimmed, "note"),
+		raw:         append(json.RawMessage(nil), trimmed...),
 	}, true
+}
+
+// parseAidaAskString reads one optional string key on its own, so a value of
+// the wrong type reads as empty instead of failing the record. Patch 27.
+func parseAidaAskString(obj json.RawMessage, key string) string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(obj, &m); err != nil {
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(m[key], &v); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 // parseAidaAnsweredAt reads answered_at on its own, so a malformed value
@@ -228,6 +286,22 @@ func (i *Instance) MarkLastAidaAskAnswered(ref string, at time.Time) (json.RawMe
 		return nil, false
 	}
 	out := rec.WithAnswered(at).JSON()
+	i.lastAidaAsk = out
+	return out, true
+}
+
+// ClearLastAidaAsk marks the current ask handled by hand (patch 27): the same
+// guard as MarkLastAidaAskAnswered (still this ref, not yet answered), plus
+// who cleared it, why, and an optional note. Returns the object to persist,
+// and false when nothing changed. No I/O.
+func (i *Instance) ClearLastAidaAsk(ref string, at time.Time, by, reason, note string) (json.RawMessage, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	rec, ok := ParseAidaAsk(i.lastAidaAsk)
+	if !ok || rec.Ref != ref || strings.TrimSpace(ref) == "" || rec.IsAnswered() {
+		return nil, false
+	}
+	out := rec.WithCleared(at, by, reason, note).JSON()
 	i.lastAidaAsk = out
 	return out, true
 }

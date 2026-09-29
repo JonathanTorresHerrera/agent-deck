@@ -1585,6 +1585,34 @@ func (s *StateDB) WriteLastAidaAsk(id string, record []byte) error {
 	})
 }
 
+// WriteLastAidaAskIfUnanswered writes record only while the stored ask is
+// still the one with this ref and has no answered_at (patch 27). It is the
+// out-of-process clear path (`agent-deck session clear-bell`): a new `B` ask
+// that replaced the record, or an answer that landed first, must win. Reports
+// whether a row changed.
+func (s *StateDB) WriteLastAidaAskIfUnanswered(id, ref string, record []byte) (bool, error) {
+	var changed bool
+	err := withBusyRetry(func() error {
+		res, err := s.db.Exec(
+			`UPDATE instances
+			   SET tool_data = json_set(
+			         COALESCE(tool_data, '{}'),
+			         '$.last_aida_ask', json(?))
+			 WHERE id = ?
+			   AND json_extract(tool_data, '$.last_aida_ask.ref') = ?
+			   AND COALESCE(json_extract(tool_data, '$.last_aida_ask.answered_at'), 0) <= 0`,
+			string(record), id, ref,
+		)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		changed = err == nil && n > 0
+		return err
+	})
+	return changed, err
+}
+
 // WriteLastAccessed atomically updates the last_accessed column for one
 // instance. MarkAccessed (#1846) uses this so each attach/detach is durable
 // on its own instead of waiting for a full saveInstances that may never run

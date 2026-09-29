@@ -474,6 +474,8 @@ func (h *Home) handleAskAidaKey() tea.Cmd {
 	h.promptInputDialog.ShowAskAida(inst.ID, inst.Title)
 	// Patch 21: warn when this session was already asked.
 	h.promptInputDialog.SetAskAidaWarning(askAidaAlreadyAskedLine(inst, askAidaNow()))
+	// Patch 27: an unanswered bell can be marked handled with Ctrl+X.
+	h.promptInputDialog.SetAskAidaCanClear(aidaBellClearable(inst))
 	return nil
 }
 
@@ -623,6 +625,10 @@ func askAidaAlreadyAskedLine(inst *session.Instance, now time.Time) string {
 	rec, ok := inst.LastAidaAsk()
 	if !ok {
 		return ""
+	}
+	// Patch 27: a bell cleared by hand says who cleared it.
+	if rec.IsCleared() {
+		return "Marked handled by " + rec.ClearedBy + " " + humanizeSince(now.Sub(rec.AnsweredAt)) + " — Enter asks again"
 	}
 	// Patch 24: say whether Aida has answered.
 	if answeredAt, answered := rec.Answered(); answered {

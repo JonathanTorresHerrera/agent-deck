@@ -8891,6 +8891,10 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Patch 19: Enter in the Ask Aida dialog.
 		return h, h.handleAskAidaSubmit(msg)
 
+	case aidaBellClearMsg:
+		// Patch 27: Ctrl+X in the Ask Aida dialog marks the bell handled.
+		return h, h.handleAidaBellClear(msg)
+
 	case askAidaResultMsg:
 		// Patch 19: one ask-aida.sh run finished.
 		// Patch 21: the returned Cmd persists the last-ask record off the
