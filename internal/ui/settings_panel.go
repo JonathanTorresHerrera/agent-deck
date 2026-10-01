@@ -51,6 +51,14 @@ const (
 	SettingSyncTitle
 	SettingShowSessionTimestamps
 	SettingShowPaneTitles
+	// Patch 31 (settings density): list density, row-detail toggles, preview
+	// split. Kept right after SettingShowPaneTitles so enum order == visual order.
+	SettingDensity
+	SettingShowToolLabel
+	SettingShowInheritedAccount
+	SettingShowEmptyGroups
+	SettingPreviewPct
+	SettingPreviewOrientation
 	SettingShowOnlyInstalledTools
 	SettingVisibleTools
 	SettingEmbeddedTerminal
@@ -59,7 +67,7 @@ const (
 )
 
 // Total number of navigable settings.
-const settingsCount = 39
+const settingsCount = 45
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -117,6 +125,14 @@ type SettingsPanel struct {
 	pendingToolVisibility  bool
 	pendingPrivacy         bool   // Enter/Space on the Privacy row: home opens consent or turns it off
 	privacyLabel           string // "on (full)" / "off", read from telemetry state on Show
+
+	// Patch 31 (settings density)
+	density              int // index into densityValues
+	showToolLabel        bool
+	showInheritedAccount bool
+	showEmptyGroups      bool
+	previewPct           int // 10-90, step 5
+	previewOrientation   int // index into previewOrientationValues
 
 	// Text input state
 	editingText bool
@@ -176,9 +192,21 @@ var (
 	statsFormatValues = []string{"compact", "full", "minimal"}
 )
 
+// Patch 31 (settings density): radio options for [display] density and
+// [ui] preview_orientation.
+var (
+	densityNames  = []string{"Compact", "Comfortable", "Spacious"}
+	densityValues = []string{session.DensityCompact, session.DensityComfortable, session.DensitySpacious}
+
+	previewOrientationNames  = []string{"Right", "Below"}
+	previewOrientationValues = []string{session.PreviewOrientationRight, session.PreviewOrientationBelow}
+)
+
 // NewSettingsPanel creates a new settings panel
 func NewSettingsPanel() *SettingsPanel {
 	return &SettingsPanel{
+		density:             1, // comfortable
+		previewPct:          session.DefaultPreviewPct,
 		toolNames:           append(append([]string{}, builtinToolNames...), "None"),
 		toolValues:          append(append([]string{}, builtinToolValues...), ""),
 		logMaxSizeMB:        10,
@@ -380,6 +408,26 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 	s.showSessionTimestamps = config.Display.ShowSessionTimestamps
 	s.showPaneTitles = config.Display.ShowPaneTitles
 
+	// Patch 31 (settings density)
+	s.density = 1
+	for i, val := range densityValues {
+		if val == config.Display.GetDensity() {
+			s.density = i
+			break
+		}
+	}
+	s.showToolLabel = config.Display.ShowToolLabel
+	s.showInheritedAccount = config.Display.ShowInheritedAccount
+	s.showEmptyGroups = config.Display.ShowEmptyGroups
+	s.previewPct = config.UI.GetPreviewPct()
+	s.previewOrientation = 0
+	for i, val := range previewOrientationValues {
+		if val == config.UI.GetPreviewOrientation() {
+			s.previewOrientation = i
+			break
+		}
+	}
+
 	// UI settings
 	s.embeddedLayout = config.UI.GetEmbeddedTerminal()
 	s.sidebarDensity = defaultSidebarDensityIndex()
@@ -528,6 +576,18 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	// Display settings
 	config.Display.ShowSessionTimestamps = s.showSessionTimestamps
 	config.Display.ShowPaneTitles = s.showPaneTitles
+
+	// Patch 31 (settings density)
+	if s.density >= 0 && s.density < len(densityValues) {
+		config.Display.Density = densityValues[s.density]
+	}
+	config.Display.ShowToolLabel = s.showToolLabel
+	config.Display.ShowInheritedAccount = s.showInheritedAccount
+	config.Display.ShowEmptyGroups = s.showEmptyGroups
+	config.UI.PreviewPct = s.previewPct
+	if s.previewOrientation >= 0 && s.previewOrientation < len(previewOrientationValues) {
+		config.UI.PreviewOrientation = previewOrientationValues[s.previewOrientation]
+	}
 
 	// UI settings
 	embeddedLayout := s.embeddedLayout
@@ -735,6 +795,28 @@ func (s *SettingsPanel) adjustValue(delta int) bool {
 			changed = true
 		}
 
+	// Patch 31 (settings density)
+	case SettingDensity:
+		newVal := s.density + delta
+		if newVal >= 0 && newVal < len(densityNames) {
+			s.density = newVal
+			changed = true
+		}
+
+	case SettingPreviewPct:
+		newVal := s.previewPct + (delta * 5)
+		if newVal >= session.MinPreviewPct && newVal <= session.MaxPreviewPct {
+			s.previewPct = newVal
+			changed = true
+		}
+
+	case SettingPreviewOrientation:
+		newVal := s.previewOrientation + delta
+		if newVal >= 0 && newVal < len(previewOrientationNames) {
+			s.previewOrientation = newVal
+			changed = true
+		}
+
 	case SettingSidebarDensity:
 		newVal := s.sidebarDensity + delta
 		if newVal >= 0 && newVal < len(sidebarDensityNames) {
@@ -850,6 +932,19 @@ func (s *SettingsPanel) toggleValue() bool {
 
 	case SettingShowOnlyInstalledTools:
 		s.showOnlyInstalledTools = !s.showOnlyInstalledTools
+		return true
+
+	// Patch 31 (settings density)
+	case SettingShowToolLabel:
+		s.showToolLabel = !s.showToolLabel
+		return true
+
+	case SettingShowInheritedAccount:
+		s.showInheritedAccount = !s.showInheritedAccount
+		return true
+
+	case SettingShowEmptyGroups:
+		s.showEmptyGroups = !s.showEmptyGroups
 		return true
 
 	case SettingEmbeddedTerminal:
@@ -1250,6 +1345,43 @@ func (s *SettingsPanel) View() string {
 	if s.cursor == int(SettingShowPaneTitles) {
 		line = highlightStyle.Render(line)
 	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
+	// Patch 31 (settings density)
+	line = "List density: " + s.renderRadioGroup(densityNames, s.density, s.cursor == int(SettingDensity))
+	if s.cursor == int(SettingDensity) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
+	line = s.renderCheckbox("Show tool name", s.showToolLabel) + " - \"claude\" label on each row"
+	if s.cursor == int(SettingShowToolLabel) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
+	line = s.renderCheckbox("Show inherited account", s.showInheritedAccount) + " - [account:inherited] tag"
+	if s.cursor == int(SettingShowInheritedAccount) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
+	line = s.renderCheckbox("Show empty groups", s.showEmptyGroups) + " - Groups with no sessions"
+	if s.cursor == int(SettingShowEmptyGroups) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
+	line = s.renderNumber("Preview split:", s.previewPct, "% preview")
+	if s.cursor == int(SettingPreviewPct) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
+	line = "Preview position: " + s.renderRadioGroup(previewOrientationNames, s.previewOrientation, s.cursor == int(SettingPreviewOrientation))
+	if s.cursor == int(SettingPreviewOrientation) {
+		line = highlightStyle.Render(line)
+	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
 
 	// UI / TOOL PICKER
@@ -1387,11 +1519,17 @@ func (s *SettingsPanel) View() string {
 			56, // SettingSyncTitle (SESSIONS section, after stats)
 			59, // SettingShowSessionTimestamps (DISPLAY section, after SESSIONS)
 			60, // SettingShowPaneTitles (DISPLAY section, after timestamps)
-			63, // SettingShowOnlyInstalledTools (TOOL PICKER section)
-			64, // SettingVisibleTools
-			67, // SettingEmbeddedTerminal (INTERFACE section)
-			68, // SettingSidebarDensity
-			73, // SettingPrivacy (PRIVACY section)
+			61, // SettingDensity (Patch 31)
+			62, // SettingShowToolLabel
+			63, // SettingShowInheritedAccount
+			64, // SettingShowEmptyGroups
+			65, // SettingPreviewPct
+			66, // SettingPreviewOrientation
+			69, // SettingShowOnlyInstalledTools (TOOL PICKER section)
+			70, // SettingVisibleTools
+			73, // SettingEmbeddedTerminal (INTERFACE section)
+			74, // SettingSidebarDensity
+			79, // SettingPrivacy (PRIVACY section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 

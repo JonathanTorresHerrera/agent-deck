@@ -1131,8 +1131,9 @@ func TestSettingsPanel_ViewShowsUnboundMCPHotkeyHint(t *testing.T) {
 
 	panel := NewSettingsPanel()
 	// Tall enough for the whole panel: its wrapped rows no longer overflow
-	// an 80-row screen, they scroll inside it.
-	panel.SetSize(100, 100)
+	// an 80-row screen, they scroll inside it. Fork patch 31 adds six DISPLAY
+	// rows, so 100 no longer holds it all.
+	panel.SetSize(100, 110)
 	panel.Show()
 	panel.cursor = int(SettingMaintenanceEnabled)
 

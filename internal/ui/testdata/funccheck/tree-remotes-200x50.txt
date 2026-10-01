@@ -1,5 +1,5 @@
 ▶ ▾ alpha (1)
-   └─ ○ local-last claude
+   └─ ○ local-last
   ▾ remotes/lab (2)
     ▾ work (2)
       └─ ○ remote-root claude

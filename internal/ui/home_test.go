@@ -376,6 +376,7 @@ func TestHomeRenameGroupWithR(t *testing.T) {
 	// Create a group tree with a group
 	home.groupTree = session.NewGroupTree([]*session.Instance{})
 	home.groupTree.CreateGroup("test-group")
+	home.showEmptyGroups = true // Patch 31 (settings density): the fixture group is empty
 	home.rebuildFlatItems()
 
 	// Position cursor on the group
@@ -2981,6 +2982,7 @@ func TestMouseDoubleClickTogglesGroup(t *testing.T) {
 	// Create a real group tree so ToggleGroup works
 	home.groupTree = session.NewGroupTree([]*session.Instance{})
 	home.groupTree.CreateGroup("test-group")
+	home.showEmptyGroups = true // Patch 31 (settings density): the fixture group is empty
 	home.rebuildFlatItems()
 
 	if len(home.flatItems) == 0 {

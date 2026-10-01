@@ -19,6 +19,7 @@ func TestAccountSlotsConfigurationTransition(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &Home{width: 240, height: 40, cursor: 1}
+			h.showInheritedAccount = true // Patch 31 (settings density): inherited tag is opt-in now
 			h.accountSlotsConfigured.Store(!tc.configured)
 			inherited := &session.Instance{ID: "inherited", Title: "follows-chain", Tool: "shell", Status: session.StatusIdle}
 			unknown := &session.Instance{ID: "unknown", Title: "unknown-slot", Tool: "shell", Status: session.StatusIdle, Account: "unknown-slot"}
