@@ -601,6 +601,15 @@ type Home struct {
 	// one. Cached here so all rows of a frame agree; reloaded after panel save.
 	showPaneTitles bool
 
+	// Patch 31 (settings density): left SESSIONS list presentation, cached from
+	// config.toml [display] and refreshed after the settings panel saves.
+	// listDensity "" == comfortable (the historical rendering).
+	listDensity          string
+	showToolLabel        bool            // dim " claude" tool name on each row (default off)
+	showInheritedAccount bool            // " [account:inherited]" badge (default off; named slots always show)
+	showEmptyGroups      bool            // keep zero-session groups in the list (default off)
+	keptEmptyGroups      map[string]bool // groups created this run: visible even while empty
+
 	// accountSlotsConfigured mirrors len(session.ConfiguredAccountNames(cfg)) > 0,
 	// the same gate the New/Edit Session dialogs use to hide their account rows
 	// (#2152). A machine with no [profiles.<name>.claude].config_dir block has
@@ -1884,6 +1893,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		session.ConfigureTmuxDisplay(cfg.Display)
 		h.showSessionTimestamps = cfg.Display.ShowSessionTimestamps
 		h.showPaneTitles = cfg.Display.ShowPaneTitles
+		h.applyListDisplaySettings(cfg.Display) // Patch 31 (settings density)
 		h.sysStatsConfig = cfg.SystemStats
 		h.costLineTemplate, h.costLineHideWhenZero = session.ResolveCostLineTemplate(cfg, actualProfile)
 		h.previewPct = cfg.UI.GetPreviewPct()
@@ -3060,8 +3070,24 @@ func (h *Home) rebuildFlatItemsPreservingSelection(identity selectedItemIdentity
 func (h *Home) rebuildFlatItemsPreservingSelectionAt(identity selectedItemIdentity, now time.Time) {
 	h.rebuildFlatItemsAt(now)
 	if !h.restoreSelectedItemIdentity(identity) && len(h.flatItems) > 0 {
-		h.cursor = min(h.cursor, len(h.flatItems)-1)
-		h.cursor = max(h.cursor, 0)
+		// Patch 31 (settings density): a group header that vanished (hidden as
+		// empty) falls back to the nearest surviving ancestor header.
+		restored := false
+		for p := identity.groupPath; p != "" && !restored; {
+			idx := strings.LastIndex(p, "/")
+			if idx < 0 {
+				break
+			}
+			p = p[:idx]
+			restored = h.restoreSelectedItemIdentity(selectedItemIdentity{groupPath: p, windowIndex: -1})
+		}
+		if !restored {
+			h.cursor = min(h.cursor, len(h.flatItems)-1)
+			h.cursor = max(h.cursor, 0)
+		}
+		if h.flatItems[h.cursor].Type == session.ItemTypeDivider {
+			h.skipDivider(1)
+		}
 	}
 	h.syncViewport()
 }
@@ -3254,6 +3280,12 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		h.flatItems = scoped
 	}
 
+	// Patch 31 (settings density): hide empty groups (default) from the rendered
+	// list. Runs after every filter and BEFORE view-mode partitioning so an
+	// empty header never sinks below a divider that would then be left dangling.
+	// groupTree is untouched, so n / N / g targeting by path is unaffected.
+	h.flatItems = h.hideEmptyGroups(h.flatItems)
+
 	// Partition into top/bottom sections by view mode (active-on-top / populated-on-top).
 	// Runs after filtering/scoping but before window injection so windows follow
 	// their parent session into whichever section it lands in.
@@ -3401,6 +3433,14 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		}
 	}
 
+	// Patch 31 (settings density): spacious density puts one blank,
+	// non-selectable spacer row before each top-level group header (not the
+	// first). Done after remotes are appended so remote roots get one too, and
+	// before creating-placeholder injection (which anchors on group headers).
+	if h.density() == session.DensitySpacious {
+		h.flatItems = insertDensitySpacers(h.flatItems)
+	}
+
 	// Invalidate mouse double-click tracking (item indices may have shifted)
 	h.lastClickIndex = -1
 
@@ -3445,6 +3485,12 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	}
 	if h.cursor < 0 {
 		h.cursor = 0
+	}
+	// Patch 31 (settings density): an index-preserving rebuild can leave the
+	// cursor parked on a blank spacer row; step off it (spacers are never at an
+	// edge, so one step in either direction lands on a selectable header).
+	if h.cursor < len(h.flatItems) && h.flatItems[h.cursor].Spacer {
+		h.skipDivider(1)
 	}
 	// Adjust viewport if cursor is out of view
 	h.syncViewport()
@@ -9355,6 +9401,17 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.reloadHotkeysFromConfig()
 				h.showSessionTimestamps = config.Display.ShowSessionTimestamps
 				h.showPaneTitles = config.Display.ShowPaneTitles
+				// Patch 31 (settings density): density / row-detail toggles /
+				// empty groups / preview split + position take effect live.
+				identity := h.captureSelectedItemIdentity()
+				h.applyListDisplaySettings(config.Display)
+				h.previewPct = config.UI.GetPreviewPct()
+				h.previewOrientation = config.UI.GetPreviewOrientation()
+				if h.groupTree != nil {
+					h.rebuildFlatItemsPreservingSelection(identity)
+				} else {
+					h.syncViewport()
+				}
 				h.setAccountSlotsConfigured(len(session.ConfiguredAccountNames(config)) > 0)
 
 				// Apply theme changes live
@@ -13753,6 +13810,11 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Issue #918: persist the optional default path captured in the dialog.
 				if created != nil && defaultPath != "" {
 					h.groupTree.SetDefaultPathForGroup(created.Path, defaultPath)
+				}
+				// Patch 31 (settings density): a group created in this run stays
+				// visible while empty, even with empty groups hidden.
+				if created != nil {
+					h.keepEmptyGroup(created.Path)
 				}
 				h.rebuildFlatItems()
 				h.saveInstances() // Persist the new group (reload-race safe via pendingGroupOps)
@@ -19947,6 +20009,11 @@ func (h *Home) renderItem(
 // renderDivider renders the non-selectable separator between view-mode sections
 // (e.g. running-on-top). It draws a dim horizontal rule with an optional caption.
 func (h *Home) renderDivider(b *strings.Builder, item session.Item) {
+	// Patch 31 (settings density): a spacer is a blank line, no rule.
+	if item.Spacer {
+		b.WriteString("\n")
+		return
+	}
 	width := h.sessionsPaneWidth() - 4
 	if width < 12 {
 		width = 12
@@ -20265,6 +20332,11 @@ func (h *Home) renderSessionItem(
 	}
 
 	tool := toolStyle.Render(" " + instTool)
+	// Patch 31 (settings density): the tool-name label is opt-in. Cleared before
+	// the `reserved` width computation below so the title gets the reclaimed cells.
+	if !h.showToolLabel {
+		tool = ""
+	}
 
 	// Supervisor badge for the maestro row.
 	maestroBadge := ""
@@ -20391,7 +20463,9 @@ func (h *Home) renderSessionItem(
 		}
 		confirmedTs, confirmedObserved := inst.LastObservedActivity()
 		ts := sessionActivityTime(inst.CreatedAt, inst.LastStartedAt, inst.LastActivityAt(), inst.LastAccessedAt, confirmedTs, confirmedObserved, hookStatus)
-		timestampBadge = tsStyle.Render(" " + formatRelativeTime(ts))
+		// Patch 31 (settings density): compact density shortens the age to its
+		// largest unit ("2h", no "ago").
+		timestampBadge = tsStyle.Render(" " + formatRelativeTimeDensity(ts, h.density()))
 	}
 
 	// Window expand/collapse chevron for sessions with 2+ windows
@@ -20437,11 +20511,17 @@ func (h *Home) renderSessionItem(
 		cellWidth(maestroBadge) + cellWidth(yoloBadge) + cellWidth(worktreeBadge) +
 		cellWidth(sandboxBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
 		cellWidth(agentBadge) + cellWidth(aidaBadge) + cellWidth(timestampBadge)
-	accountBudget := instState.accountDisplay.width
+	// Patch 31 (settings density): the inherited-account tag is opt-in; a NAMED
+	// slot (non-empty stored account) always renders because it is meaningful.
+	rowAccount := instState.accountDisplay
+	if instState.account == "" && !h.showInheritedAccount {
+		rowAccount = accountPresentation{}
+	}
+	accountBudget := rowAccount.width
 	if listWidth > 0 {
 		accountBudget = min(accountBudget, max(0, listWidth-reserved-2))
 	}
-	accountBadge, accountWidth := instState.accountDisplay.fit(accountBudget)
+	accountBadge, accountWidth := rowAccount.fit(accountBudget)
 	if accountBadge != "" {
 		accountStyle := DimStyle
 		if selected {

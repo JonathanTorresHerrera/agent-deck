@@ -3202,6 +3202,46 @@ type DisplaySettings struct {
 	// every session row, not just the selected one. Default: false — opt-in to
 	// avoid crowding narrow sidebars. See renderSessionItem for the source.
 	ShowPaneTitles bool `toml:"show_pane_titles,omitempty"`
+
+	// Patch 31 (settings density): left SESSIONS list presentation.
+	//
+	// Density is one of "compact" | "comfortable" | "spacious". Empty or
+	// unknown resolves to comfortable (the historical rendering). See
+	// GetDensity.
+	Density string `toml:"density,omitempty"`
+
+	// ShowToolLabel shows the dim " claude" tool name on every session row.
+	// Default: false (hidden; the title gets the reclaimed width).
+	ShowToolLabel bool `toml:"show_tool_label,omitempty"`
+
+	// ShowInheritedAccount shows the " [account:inherited]" badge on rows whose
+	// session has no explicit account slot. Default: false. A NAMED account
+	// badge always shows regardless — it carries information.
+	ShowInheritedAccount bool `toml:"show_inherited_account,omitempty"`
+
+	// ShowEmptyGroups keeps groups with zero sessions (recursive, in the
+	// rendered archive partition) visible in the list. Default: false (hidden).
+	ShowEmptyGroups bool `toml:"show_empty_groups,omitempty"`
+}
+
+// Patch 31 (settings density): list density values for [display] density.
+const (
+	DensityCompact     = "compact"
+	DensityComfortable = "comfortable"
+	DensitySpacious    = "spacious"
+	DefaultDensity     = DensityComfortable
+)
+
+// GetDensity returns the resolved list density. Empty, unknown, or
+// differently-cased values fall back to DefaultDensity.
+func (d DisplaySettings) GetDensity() string {
+	switch strings.ToLower(strings.TrimSpace(d.Density)) {
+	case DensityCompact:
+		return DensityCompact
+	case DensitySpacious:
+		return DensitySpacious
+	}
+	return DefaultDensity
 }
 
 // GetActiveFilterExcludes returns the resolved set of statuses the % filter

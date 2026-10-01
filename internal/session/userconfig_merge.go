@@ -113,10 +113,27 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 	//    and filter prefs stay from disk) ───────────────────────────────
 	merged.Display.ShowSessionTimestamps = panel.Display.ShowSessionTimestamps
 	merged.Display.ShowPaneTitles = panel.Display.ShowPaneTitles
+	// Patch 31 (settings density): list density + row-detail toggles. Every
+	// field must be listed here or the panel's value is silently dropped.
+	if panel.Display.Density != "" {
+		merged.Display.Density = panel.Display.Density
+	}
+	merged.Display.ShowToolLabel = panel.Display.ShowToolLabel
+	merged.Display.ShowInheritedAccount = panel.Display.ShowInheritedAccount
+	merged.Display.ShowEmptyGroups = panel.Display.ShowEmptyGroups
 
 	// ── UI subset (panel manages show_only_installed_tools; hidden_tools
 	//    is edited via ToolVisibilityPanel) ─────────────────────────────
 	merged.UI.ShowOnlyInstalledTools = panel.UI.ShowOnlyInstalledTools
+	// Patch 31 (settings density): preview split + position. Overlay only when
+	// the panel set them (zero/empty = "not managed here", e.g. setup wizard),
+	// so a wizard save never resets the user's split back to default.
+	if panel.UI.PreviewPct > 0 {
+		merged.UI.PreviewPct = panel.UI.PreviewPct
+	}
+	if panel.UI.PreviewOrientation != "" {
+		merged.UI.PreviewOrientation = panel.UI.PreviewOrientation
+	}
 
 	// ── SystemStats subset ─────────────────────────────────────────────
 	if panel.SystemStats.Enabled != nil {

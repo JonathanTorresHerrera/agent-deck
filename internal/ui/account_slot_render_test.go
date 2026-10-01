@@ -31,6 +31,7 @@ func TestStoredAccountRenderBaseline(t *testing.T) {
 					h := NewHome()
 					h.width, h.height = 240, 40
 					h.accountSlotsConfigured.Store(true)
+					h.showInheritedAccount = true // Patch 31 (settings density): inherited tag is opt-in now
 					if refreshed {
 						h.refreshSessionRenderSnapshot([]*session.Instance{inst})
 					}

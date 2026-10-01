@@ -95,6 +95,7 @@ func TestPopulatedTopWiringSinksEmptyGroup(t *testing.T) {
 	// Add an empty group with no sessions.
 	home.groupTree.CreateGroup("empties")
 	home.groupViewMode = session.GroupViewPopulatedTop
+	home.showEmptyGroups = true // Patch 31 (settings density): fixture needs the empty group visible
 	home.rebuildFlatItems()
 
 	div := dividerIndex(home)
@@ -140,6 +141,7 @@ func TestPopulatedTopWiringSinksEmptyGroupWithArchivedSession(t *testing.T) {
 	// Add an empty group with no sessions.
 	home.groupTree.CreateGroup("empties")
 	home.groupViewMode = session.GroupViewPopulatedTop
+	home.showEmptyGroups = true // Patch 31 (settings density): fixture needs the empty group visible
 	home.rebuildFlatItems()
 
 	div := dividerIndex(home)
@@ -176,6 +178,7 @@ func TestPopulatedTopWiringSinksFullyArchivedGroup(t *testing.T) {
 	home.instancesMu.Unlock()
 
 	home.groupViewMode = session.GroupViewPopulatedTop
+	home.showEmptyGroups = true // Patch 31 (settings density): fixture needs the empty group visible
 	home.rebuildFlatItems()
 
 	div := dividerIndex(home)

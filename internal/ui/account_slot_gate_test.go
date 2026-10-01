@@ -73,6 +73,7 @@ func TestBadgeReturnsWhenSlotsAreConfigured(t *testing.T) {
 	h := NewHome()
 	h.width, h.height = 240, 40
 	h.accountSlotsConfigured.Store(true)
+	h.showInheritedAccount = true // Patch 31 (settings density): inherited tag is opt-in now
 	h.refreshSessionRenderSnapshot([]*session.Instance{inherited, pinned})
 
 	for inst, want := range map[*session.Instance]string{

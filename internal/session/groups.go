@@ -63,6 +63,9 @@ type Item struct {
 	CreatingTitle       string             // Display title for creating placeholder
 	CreatingTool        string             // Tool for creating placeholder
 	DividerLabel        string             // Label shown on an ItemTypeDivider row (e.g. "idle / done")
+	// Patch 31 (settings density): true on an ItemTypeDivider row that is a
+	// blank spacer line (spacious density), not a labeled/ruled view-mode divider.
+	Spacer bool
 }
 
 // IsCreatingPlaceholder reports whether this row is a still-creating session

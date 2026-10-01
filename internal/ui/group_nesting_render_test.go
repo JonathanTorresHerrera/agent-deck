@@ -52,7 +52,8 @@ func TestGroupNestingIndent(t *testing.T) {
 	home.instancesMu.Unlock()
 	home.groupTree = session.NewGroupTreeWithGroups(instances, groups)
 	home.groupViewMode = session.GroupViewPopulatedTop
-	home.cursor = -1 // nothing selected, so root hotkeys render
+	home.showEmptyGroups = true // Patch 31 (settings density): fixture needs the empty groups visible
+	home.cursor = -1            // nothing selected, so root hotkeys render
 	home.rebuildFlatItems()
 
 	rendered := home.renderSessionList(120, 60)
@@ -121,6 +122,7 @@ func TestDuplicateRootHeadersReuseRootGroupNumber(t *testing.T) {
 	home.instancesMu.Unlock()
 	home.groupTree = session.NewGroupTreeWithGroups(instances, groups)
 	home.groupViewMode = session.GroupViewPopulatedTop
+	home.showEmptyGroups = true // Patch 31 (settings density): fixture needs the empty groups visible
 	home.rebuildFlatItems()
 
 	var nums []int
