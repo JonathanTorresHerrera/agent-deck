@@ -43,6 +43,11 @@ const hookHandlerSubcommand = "hook-handler"
 // on a fresh install) and the heal never writes; see
 // stableHookExecutablePath. Test seam.
 var hookExecutablePath = func() (string, error) {
+	// Fork patch 32: a WSL binary cannot be pinned into a Windows-side
+	// Claude config (see patch32_windows_hook_pin.go).
+	if claudeConfigOnWindowsMount() {
+		return "", nil
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
