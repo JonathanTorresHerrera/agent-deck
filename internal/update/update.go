@@ -661,6 +661,9 @@ func CheckForUpdateAsync(currentVersion string) <-chan *UpdateInfo {
 
 // PerformUpdate downloads and installs the latest version
 func PerformUpdate(downloadURL string) error {
+	if ForkInstallBlocked { // Patch 30b: last line of defence for every install path
+		return ErrForkBuild
+	}
 	if downloadURL == "" {
 		return fmt.Errorf("no download URL available for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -717,6 +720,9 @@ func PerformUpdate(downloadURL string) error {
 // missing-entry, or hash mismatch errors occur before the installed binary is
 // touched.
 func PerformVerifiedUpdate(release *Release, goos, goarch string) error {
+	if ForkInstallBlocked { // Patch 30b: last line of defence for every install path
+		return ErrForkBuild
+	}
 	execPath, upgradeCmd, managed, err := detectHomebrewManagedInstall()
 	if err != nil {
 		return fmt.Errorf("failed to detect install type: %w", err)
