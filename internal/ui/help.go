@@ -389,6 +389,7 @@ func (h *HelpOverlay) View() string {
 				{"Row 2: All ● ◐ ○ ■", "Per-status session counts for the current tab"},
 				{"! @ # $", "Filter list to running / waiting / idle / error only"},
 				{"0  %  ^", "Show all • open sessions only • archived"},
+				{"click a status chip", "Hide / show that status (several can be off); click All to reset"},
 				{"t", "Cycle group view (tabs / tree / flat)"},
 				{"$", "Also opens the cost dashboard when cost tracking is on"},
 			},
