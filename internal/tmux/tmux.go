@@ -5477,6 +5477,13 @@ func (s *Session) BackgroundWorkPending() bool {
 	s.mu.Lock()
 	s.bgWorkPending = pending
 	s.bgWorkCheckedAt = time.Now()
+	// Fork patch 27: the same capture refreshes the cached substate. The hook
+	// fast path in UpdateStatus returns before GetStatus (the only other
+	// per-tick writer of lastSubstate), so without this CachedSubstate, which
+	// the TUI row glyph and transition events read, never learns about
+	// background-work, or keeps it after the shells finish. Same call
+	// GetSubstate makes, under the same lock.
+	s.classifyFrameLocked(s.prepareFrame(StripANSI(rawContent)))
 	s.mu.Unlock()
 	return pending
 }
