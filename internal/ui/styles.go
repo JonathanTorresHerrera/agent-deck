@@ -243,7 +243,7 @@ var (
 	SessionStatusError    lipgloss.Style
 	SessionStatusStopped  lipgloss.Style
 	SessionStatusSelStyle lipgloss.Style
-	// Patch 27: turn done, only background shells running (◌).
+	// Patch 27/33: turn done, only background shells running (blue ●).
 	SessionStatusBackgroundWork lipgloss.Style
 
 	// Session title styles by state
@@ -497,7 +497,7 @@ func initStyles() {
 	SessionStatusError = lipgloss.NewStyle().Foreground(ColorRed)
 	SessionStatusStopped = lipgloss.NewStyle().Foreground(ColorTextDim)
 	SessionStatusSelStyle = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorAccent)
-	SessionStatusBackgroundWork = lipgloss.NewStyle().Foreground(ColorCyan)
+	SessionStatusBackgroundWork = lipgloss.NewStyle().Foreground(ColorAccent) // Patch 33: blue dot
 
 	// Session title styles by state
 	SessionTitleDefault = lipgloss.NewStyle().Foreground(ColorText)
