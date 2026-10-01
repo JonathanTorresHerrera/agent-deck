@@ -30,7 +30,7 @@ func connectionStatusLine(archived bool, status session.Status) (text string, st
 // so a stale cached substate cannot relabel a running session.
 func claudeConnectionStatusLine(archived bool, status session.Status, substate session.Substate) (text string, style lipgloss.Style) {
 	if !archived && isBackgroundWorkRow(status, substate) {
-		return "◌ Connected · bg shells", SessionStatusBackgroundWork.Bold(true)
+		return backgroundWorkGlyph + " Connected · bg shells", SessionStatusBackgroundWork.Bold(true)
 	}
 	return connectionStatusLine(archived, status)
 }
@@ -94,7 +94,7 @@ func rowStatusGlyph(status session.Status, substate session.Substate, archived b
 	// and colour so "paused with a dev server up" is not mistaken for either a
 	// working session (green ●) or a plain finished one (yellow ◐).
 	if isBackgroundWorkRow(status, substate) {
-		icon, style = "◌", SessionStatusBackgroundWork
+		icon, style = backgroundWorkGlyph, SessionStatusBackgroundWork
 	}
 
 	if archived {
@@ -149,3 +149,8 @@ func authHoldBannerLines(width int) string {
 	}
 	return out
 }
+
+// backgroundWorkGlyph marks a row whose turn is done but whose background
+// shells are still running. Patch 33: a filled dot in the theme's blue (was a
+// cyan ◌ outline) — green means the agent is working, blue means only shells.
+const backgroundWorkGlyph = "●"

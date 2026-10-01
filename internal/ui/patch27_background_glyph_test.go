@@ -17,8 +17,8 @@ func TestPatch27_RowStatusGlyph_BackgroundWork(t *testing.T) {
 		archived bool
 		want     string
 	}{
-		{"waiting + background-work", session.StatusWaiting, session.SubstateBackgroundWork, false, "◌"},
-		{"idle + background-work", session.StatusIdle, session.SubstateBackgroundWork, false, "◌"},
+		{"waiting + background-work", session.StatusWaiting, session.SubstateBackgroundWork, false, backgroundWorkGlyph},
+		{"idle + background-work", session.StatusIdle, session.SubstateBackgroundWork, false, backgroundWorkGlyph},
 		{"running + stale background-work", session.StatusRunning, session.SubstateBackgroundWork, false, "●"},
 		{"error + stale background-work", session.StatusError, session.SubstateBackgroundWork, false, "✕"},
 		{"archived + background-work", session.StatusWaiting, session.SubstateBackgroundWork, true, "■"},
@@ -47,7 +47,7 @@ func TestPatch27_BackgroundWorkStyleDistinct(t *testing.T) {
 
 func TestPatch27_ClaudeConnectionStatusLine(t *testing.T) {
 	text, _ := claudeConnectionStatusLine(false, session.StatusWaiting, session.SubstateBackgroundWork)
-	if !strings.HasPrefix(text, "◌") || !strings.Contains(text, "bg shells") {
+	if !strings.HasPrefix(text, backgroundWorkGlyph) || !strings.Contains(text, "bg shells") {
 		t.Fatalf("background-work status line = %q, want ◌ … bg shells", text)
 	}
 	text, _ = claudeConnectionStatusLine(false, session.StatusWaiting, session.SubstateNone)

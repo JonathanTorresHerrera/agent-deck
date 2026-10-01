@@ -21465,10 +21465,10 @@ func (h *Home) renderPreviewPane(width, height int) string {
 		statusColor = ColorTextDim
 	}
 	statusText := string(selectedStatus)
-	// Patch 27: mirror the ◌ row glyph — turn done, only background shells left.
+	// Patch 27/33: mirror the blue ● row glyph — turn done, only background shells left.
 	if !selected.IsArchived() && isBackgroundWorkRow(selectedStatus, selected.CachedSubstate()) {
-		statusIcon = "◌"
-		statusColor = ColorCyan
+		statusIcon = backgroundWorkGlyph
+		statusColor = ColorAccent // Patch 33: blue dot
 		statusText += " · bg shells"
 	}
 
