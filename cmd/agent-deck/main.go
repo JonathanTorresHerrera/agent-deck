@@ -3542,6 +3542,12 @@ func handleUpdate(args []string) {
 		os.Exit(1)
 	}
 
+	// Patch 30 (fork update guard): never install an upstream build over the fork.
+	if forkUpdateBlocked(*checkOnly, *timerStatus, *uninstallTimer) {
+		printForkUpdateRefusal(os.Stderr)
+		os.Exit(3)
+	}
+
 	shutdownLog := initUpdateCommandLogging()
 	exit := func(code int) {
 		shutdownLog()

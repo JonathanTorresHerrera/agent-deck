@@ -34,6 +34,7 @@ func stubRestartTarget(t *testing.T, checkErr, probeErr error) *int {
 
 func newRestartTestHome(t *testing.T) *Home {
 	t.Helper()
+	allowStockInstall(t) // Patch 30: these tests exercise the upstream install path
 	stubRestartTarget(t, nil, nil)
 	stubStatBinary(t, fpAt(1, 1), nil)
 	prevOrphan := orphanCheck

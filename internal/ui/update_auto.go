@@ -136,6 +136,8 @@ func (h *Home) autoInstallSkipReason(info *update.UpdateInfo) string {
 		return "release still publishing"
 	case h.autoUpdateSuppressedReason != "":
 		return h.autoUpdateSuppressedReason
+	case forkInstallBlocked: // Patch 30: custom fork, merged by a session
+		return "custom fork build"
 	case h.homebrewManaged:
 		return "homebrew-managed install"
 	case h.binaryOrphanReason != "":
