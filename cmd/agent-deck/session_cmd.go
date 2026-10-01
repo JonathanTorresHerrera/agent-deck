@@ -90,6 +90,8 @@ func handleSession(profile string, args []string) {
 		handleSessionSend(profile, args[1:])
 	case "approve":
 		handleSessionApprove(profile, args[1:])
+	case "clear-bell": // Patch 29
+		handleSessionClearBell(profile, args[1:])
 	case "send-keys":
 		handleSessionSendKeys(profile, args[1:])
 	case "output":
@@ -135,6 +137,7 @@ func printSessionHelp() {
 	fmt.Println("  move <id> <path>        Move session to a new path (migrates Claude history)")
 	fmt.Println("  send <id> <message>     Send a message to a running session")
 	fmt.Println("  approve <id> [choice]   Resolve a visible Codex approval prompt")
+	fmt.Println("  clear-bell <id|title>   Mark the Ask-Aida bell handled (--note, --by, --reason)")
 	fmt.Println("  output <id>             Get the last response from a session")
 	fmt.Println("  children [id]           List sub-sessions with status + last completion")
 	fmt.Println("  search <query>          Search message content across Claude sessions")
@@ -1758,6 +1761,10 @@ func handleSessionShow(profile string, args []string) {
 	addEffortJSON(jsonData, inst)
 	addClaudeOptionsJSON(jsonData, inst)
 	addAutoNameJSON(jsonData, inst)
+	// Patch 29: the Ask-Aida bell, when the session was ever asked.
+	if ask := aidaAskJSON(inst, time.Now()); ask != nil {
+		jsonData["aida_ask"] = ask
+	}
 
 	if inst.Command != "" {
 		jsonData["command"] = inst.Command

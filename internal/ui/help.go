@@ -307,7 +307,7 @@ func (h *HelpOverlay) View() string {
 				{copyInfoKey, "Copy a preview value (Session ID / Path / Repo / Branch)"},
 				{"Y", "Copy a code block from output"},
 				{copyPaneKey, "Copy visible terminal text, including links"},
-				{askAidaKey, "Ask Aida to check this session (optional note)"},
+				{askAidaKey, "Ask Aida to check this session (optional note; Ctrl+X in it marks the 🔔 handled)"},
 				{sendKey, "Send output to session"},
 				{execShellKey, "Exec shell in sandbox container"},
 				{openShellHereKey, "Open shell in session's worktree (split pane / window)"},

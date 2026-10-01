@@ -95,7 +95,14 @@ func lastAidaAskPreviewLine(inst *session.Instance) string {
 	// Patch 24: an answered ask leads with the answer; an unanswered one that
 	// rang Aida says it is still waiting.
 	var line string
-	if answeredAt, answered := rec.Answered(); answered {
+	if rec.IsCleared() {
+		// Patch 29: cleared by hand, not by Aida's ack.
+		line = "✅ Marked handled by " + rec.ClearedBy + ": " + formatActivityStamp(rec.AnsweredAt, false) +
+			" (asked " + formatRelativeTime(rec.At) + ")"
+		if rec.Note != "" {
+			line += " — " + rec.Note
+		}
+	} else if answeredAt, answered := rec.Answered(); answered {
 		line = "✅ Aida answered: " + formatActivityStamp(answeredAt, false) +
 			" (asked " + formatRelativeTime(rec.At) + ")"
 	} else {
