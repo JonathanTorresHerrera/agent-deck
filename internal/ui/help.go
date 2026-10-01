@@ -370,7 +370,7 @@ func (h *HelpOverlay) View() string {
 				{forkKeys, "Fork session (Claude/Pi)"},
 				{yoloKey, "Toggle YOLO mode"},
 				{contextInspectorKey, "Inspect full context (everything the agent is being sent, ranked by cost)"},
-				{askAidaKey, "Ask Aida to check this session (optional note)"},
+				{askAidaKey, "Ask Aida to check this session (optional note; Ctrl+X in it marks the 🔔 handled)"},
 				{sendKey, "Send output to session"},
 				{execShellKey, "Exec shell in sandbox container"},
 				{openShellHereKey, "Open shell in session's worktree (split pane / window)"},

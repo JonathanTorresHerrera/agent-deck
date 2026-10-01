@@ -116,6 +116,8 @@ func handleSession(profile string, args []string) {
 		handleSessionSendWorker(profile, args[1:])
 	case "approve":
 		handleSessionApprove(profile, args[1:])
+	case "clear-bell": // Patch 29
+		handleSessionClearBell(profile, args[1:])
 	case "send-keys":
 		handleSessionSendKeys(profile, args[1:])
 	case "output":
@@ -175,6 +177,7 @@ func printSessionHelp() {
 	fmt.Println("  send <id> <message>     Send a message to a running session (--queue: never silently lost, see send-status; --image <path>)")
 	fmt.Println("  send-status <send-id>   State of a queued send: queued, typed, submitted, landed or failed")
 	fmt.Println("  approve <id> [choice]   Resolve a visible Codex approval prompt")
+	fmt.Println("  clear-bell <id|title>   Mark the Ask-Aida bell handled (--note, --by, --reason)")
 	fmt.Println("  output <id>             Get the last response from a session")
 	fmt.Println("  context [id]            Show what is loaded into the agent's context, ranked by cost")
 	fmt.Println("  children [id]           List sub-sessions with status + last completion")
@@ -1941,6 +1944,10 @@ func handleSessionShow(profile string, args []string) {
 	addEffortJSON(jsonData, inst)
 	addClaudeOptionsJSON(jsonData, inst)
 	addAutoNameJSON(jsonData, inst)
+	// Patch 29: the Ask-Aida bell, when the session was ever asked.
+	if ask := aidaAskJSON(inst, time.Now()); ask != nil {
+		jsonData["aida_ask"] = ask
+	}
 
 	if inst.Command != "" {
 		jsonData["command"] = inst.Command

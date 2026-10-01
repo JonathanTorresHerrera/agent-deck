@@ -39,6 +39,9 @@ type PromptInputDialog struct {
 	// Patch 21: "Already asked Aida …" shown above the input when the session
 	// has a last_aida_ask record. Empty = no line. Reset by Show and Hide.
 	askAidaWarning string
+	// Patch 29: the session has an unanswered bell, so Ctrl+X marks it handled
+	// (the typed text becomes the clear note). Reset by Show and Hide.
+	askAidaCanClear bool
 }
 
 const (
@@ -46,6 +49,8 @@ const (
 	// Patch 19: the Ask Aida dialog's placeholder and hint line.
 	askAidaPlaceholder = "Optional note for Aida…"
 	askAidaHint        = "Enter send · Esc cancel · empty = default ask"
+	// Patch 29: the hint when Ctrl+X can clear the session's bell.
+	askAidaHintClear = askAidaHint + " · Ctrl+X mark handled (text = note)"
 )
 
 // NewPromptInputDialog creates the inline prompt input (hidden).
@@ -61,7 +66,8 @@ func NewPromptInputDialog() *PromptInputDialog {
 func (d *PromptInputDialog) Show(instanceID, title string) {
 	d.visible = true
 	d.askAida = false
-	d.askAidaWarning = "" // Patch 21
+	d.askAidaWarning = ""     // Patch 21
+	d.askAidaCanClear = false // Patch 29
 	d.instanceID = instanceID
 	d.title = title
 	d.input.Placeholder = promptInputPlaceholder
@@ -86,6 +92,15 @@ func (d *PromptInputDialog) SetAskAidaWarning(line string) {
 	d.askAidaWarning = line
 }
 
+// SetAskAidaCanClear enables Ctrl+X (mark the bell handled) for the open Ask
+// Aida dialog. Show and Hide reset it. Patch 29.
+func (d *PromptInputDialog) SetAskAidaCanClear(ok bool) {
+	if d == nil {
+		return
+	}
+	d.askAidaCanClear = ok
+}
+
 // IsAskAida reports whether the open bar is the Ask Aida dialog. Patch 19.
 func (d *PromptInputDialog) IsAskAida() bool { return d.IsVisible() && d.askAida }
 
@@ -93,7 +108,8 @@ func (d *PromptInputDialog) IsAskAida() bool { return d.IsVisible() && d.askAida
 func (d *PromptInputDialog) Hide() {
 	d.visible = false
 	d.askAida = false
-	d.askAidaWarning = "" // Patch 21
+	d.askAidaWarning = ""     // Patch 21
+	d.askAidaCanClear = false // Patch 29
 	d.input.Blur()
 	d.instanceID = ""
 	d.title = ""
@@ -132,6 +148,19 @@ func (d *PromptInputDialog) Update(msg tea.KeyMsg) (*PromptInputDialog, tea.Cmd)
 	case "esc":
 		d.Hide()
 		return d, nil
+	case "ctrl+x":
+		// Patch 29: mark the session's Aida bell handled instead of asking again.
+		if d.askAida && d.askAidaCanClear {
+			note := strings.TrimSpace(d.input.Value())
+			instanceID := d.instanceID
+			d.Hide()
+			return d, func() tea.Msg {
+				return aidaBellClearMsg{instanceID: instanceID, note: note}
+			}
+		}
+		var cmd tea.Cmd
+		d.input, cmd = d.input.Update(msg)
+		return d, cmd
 	case "enter":
 		text := strings.TrimSpace(d.input.Value())
 		instanceID := d.instanceID
@@ -178,6 +207,9 @@ func (d *PromptInputDialog) View(listBody string) string {
 		// Patch 19
 		label = fmt.Sprintf("Ask Aida about %q", d.title)
 		hint = askAidaHint
+		if d.askAidaCanClear {
+			hint = askAidaHintClear // Patch 29
+		}
 		// Patch 21: the "already asked" line sits between the label and the
 		// input, in the warning color.
 		if d.askAidaWarning != "" {
