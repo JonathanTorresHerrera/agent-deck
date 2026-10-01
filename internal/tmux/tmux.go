@@ -1200,7 +1200,8 @@ type Session struct {
 	// UpdateStatus has no captured pane content, so it must capture separately to
 	// check for in-flight background shells/agents; this bounds that to one
 	// capture per bgWorkCacheTTL while a session sits at the prompt.
-	bgWorkPending   bool
+	// Patch 27: caches the kind (shells vs agent), not just a bool.
+	bgWorkKind      BackgroundWorkKind
 	bgWorkCheckedAt time.Time
 
 	// Simple state tracking (hash-based)
@@ -4330,6 +4331,9 @@ func (s *Session) GetStatus() (string, error) {
 			// (yellow) and fire a premature "finished" notification. Keep it green
 			// until the work actually completes (then the next poll settles to
 			// waiting and notifies — "done" now means foreground AND background).
+			// Patch 27: only an awaited background AGENT keeps it green here;
+			// shells-only falls through to the prompt logic below (waiting/idle,
+			// substate background-work).
 			if s.markBackgroundWorkActiveLocked(content, currentTS, shortName) {
 				return "active", nil
 			}
@@ -4509,6 +4513,7 @@ func (s *Session) GetStatus() (string, error) {
 					// a bg shell's output drives the spike, so without this the
 					// prompt check below would flip it to waiting and fire a
 					// premature completion (mirrors the busy-check path above).
+					// Patch 27: awaited background agent only, as above.
 					if s.markBackgroundWorkActiveLocked(content, currentTS, shortName) {
 						s.stateTracker.activityCheckStart = time.Time{}
 						s.stateTracker.activityChangeCount = 0
@@ -4966,22 +4971,35 @@ func (s *Session) isClaudeTool() bool {
 const bgWorkCacheTTL = 3 * time.Second
 
 // BackgroundWorkPending reports whether a Claude session at the prompt still has
-// background work in flight (run_in_background shells or a background agent the
-// turn is awaiting). It captures the pane itself — for the UpdateStatus hook fast
-// path, which short-circuits before GetStatus and so has no captured content —
-// and caches the result briefly (bgWorkCacheTTL). Returns false for non-Claude
-// sessions. Safe to call WITHOUT holding s.mu (acquires it internally; releases
-// it for the slow capture).
+// ANY background work in flight (run_in_background shells or a background agent
+// the turn is awaiting). Kept with its original meaning for every caller; use
+// BackgroundWork to tell shells from an agent (Patch 27).
 func (s *Session) BackgroundWorkPending() bool {
+	return s.BackgroundWork() != BackgroundWorkNone
+}
+
+// BackgroundWork reports which kind of background work a Claude session at the
+// prompt still has in flight (Patch 27): none, shells only, or an awaited
+// background agent (agent wins when both show). It captures the pane itself —
+// for the UpdateStatus hook fast path, which short-circuits before GetStatus and
+// so has no captured content — and caches the result briefly (bgWorkCacheTTL).
+// Returns BackgroundWorkNone for non-Claude sessions. Safe to call WITHOUT
+// holding s.mu (acquires it internally; releases it for the slow capture).
+//
+// Patch 27: a fresh capture also refreshes lastSubstate. The hook fast path
+// returns before GetStatus (the only other per-tick writer), so without this
+// CachedSubstate — the TUI row glyph, transition events — would never learn
+// about background-work, or would keep it after the shells finish.
+func (s *Session) BackgroundWork() BackgroundWorkKind {
 	s.mu.Lock()
 	if !s.isClaudeTool() {
 		s.mu.Unlock()
-		return false
+		return BackgroundWorkNone
 	}
 	if !s.bgWorkCheckedAt.IsZero() && time.Since(s.bgWorkCheckedAt) < bgWorkCacheTTL {
-		pending := s.bgWorkPending
+		kind := s.bgWorkKind
 		s.mu.Unlock()
-		return pending
+		return kind
 	}
 	s.mu.Unlock()
 
@@ -4992,26 +5010,37 @@ func (s *Session) BackgroundWorkPending() bool {
 		// waiting hook fire a premature completion. Keep the previous value and
 		// leave bgWorkCheckedAt unchanged so the next call re-captures.
 		s.mu.Lock()
-		pending := s.bgWorkPending
+		kind := s.bgWorkKind
 		s.mu.Unlock()
-		return pending
+		return kind
 	}
-	pending := claudeBackgroundWorkPending(StripANSI(rawContent))
+	content := StripANSI(rawContent)
+	kind := claudeBackgroundWorkKind(content)
 
 	s.mu.Lock()
-	s.bgWorkPending = pending
+	s.bgWorkKind = kind
 	s.bgWorkCheckedAt = time.Now()
+	// Held across classifySubstate: it mutates cachedPromptDetector (same rule
+	// as GetSubstate).
+	s.lastSubstate = s.classifySubstate(content)
 	s.mu.Unlock()
-	return pending
+	return kind
 }
 
 // markBackgroundWorkActiveLocked applies the "keep green while background work is
-// in flight" state update when a Claude session is at the prompt but still has
-// run_in_background shells / an awaited background agent. Returns true when it
-// fired (caller should return "active"). Accepts raw or stripped content
-// (StripANSI is idempotent). Must be called with s.mu held.
+// in flight" state update when a Claude session is at the prompt but its turn is
+// still awaiting a background AGENT. Returns true when it fired (caller should
+// return "active"). Accepts raw or stripped content (StripANSI is idempotent).
+// Must be called with s.mu held.
+//
+// Patch 27: shells-only no longer fires. A background shell may never exit (a
+// dev server, a tail), so it must not hold the session green: the caller falls
+// through to the normal prompt logic (waiting, or idle once acknowledged), and
+// classifySubstate names it background-work. Leaving acknowledged untouched is
+// load-bearing — clearing it here would turn an acknowledged session back to
+// waiting on every poll.
 func (s *Session) markBackgroundWorkActiveLocked(content string, currentTS int64, shortName string) bool {
-	if !s.isClaudeTool() || !claudeBackgroundWorkPending(StripANSI(content)) {
+	if !s.isClaudeTool() || claudeBackgroundWorkKind(StripANSI(content)) != BackgroundWorkAgent {
 		return false
 	}
 	s.stateTracker.lastChangeTime = time.Now()

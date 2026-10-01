@@ -902,6 +902,9 @@ func SubstateLabel(sub session.Substate) string {
 		return "usage limit"
 	case session.SubstateIdleAtEmptyPrompt:
 		return "idle at prompt"
+	case session.SubstateBackgroundWork:
+		// Patch 27: turn done, only background shells still running.
+		return "bg shells"
 	case session.SubstateRunning:
 		return "working"
 	default:

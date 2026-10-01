@@ -21307,9 +21307,16 @@ func (h *Home) renderPreviewPane(width, height int) string {
 		statusIcon = "■"
 		statusColor = ColorTextDim
 	}
+	statusText := string(selectedStatus)
+	// Patch 27: mirror the ◌ row glyph — turn done, only background shells left.
+	if !selected.IsArchived() && isBackgroundWorkRow(selectedStatus, selected.CachedSubstate()) {
+		statusIcon = "◌"
+		statusColor = ColorCyan
+		statusText += " · bg shells"
+	}
 
 	// Header with session name and status
-	statusBadge := lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon + " " + string(selectedStatus))
+	statusBadge := lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon + " " + statusText)
 	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 	b.WriteString(nameStyle.Render(selected.Title))
 	b.WriteString("  ")
@@ -21511,7 +21518,8 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 		// Status line
 		if selected.ClaudeSessionID != "" {
-			statusText, statusStyle := connectionStatusLine(selected.IsArchived(), selectedStatus)
+			// Patch 27: substate-aware so background-work reads "bg shells".
+			statusText, statusStyle := claudeConnectionStatusLine(selected.IsArchived(), selectedStatus, selected.CachedSubstate())
 			b.WriteString(labelStyle.Render("Status:  "))
 			b.WriteString(statusStyle.Render(statusText))
 			b.WriteString("\n")

@@ -88,6 +88,7 @@ const (
 	SubstateModelUnavailable  = tmux.SubstateModelUnavailable
 	SubstateAuth401           = tmux.SubstateAuth401
 	SubstateUsageLimit        = tmux.SubstateUsageLimit
+	SubstateBackgroundWork    = tmux.SubstateBackgroundWork
 )
 
 const wrapperPlaceholder = "{command}"
@@ -5631,6 +5632,26 @@ var resumeCheckRetryDelay = 200 * time.Millisecond
 // to type /clear and a follow-up prompt.
 var clearRebindMtimeGrace = 5 * time.Second
 
+// claudeStopHookStatus maps Claude's Stop hook ("waiting") to a status, given
+// the background work still showing at the prompt and the acknowledged flag.
+//
+// Patch 27: only an awaited background AGENT keeps the session running (Claude
+// resumes by itself when the agent reports). Background SHELLS alone are
+// treated exactly like a plain Stop — waiting, or idle once acknowledged — so
+// the normal running->waiting transition fires the finished notification even
+// when a shell (a dev server, a tail) never exits. The substate background-work
+// tells the two apart for the row glyph and list/show JSON.
+func claudeStopHookStatus(kind tmux.BackgroundWorkKind, acknowledged bool) Status {
+	switch {
+	case kind == tmux.BackgroundWorkAgent:
+		return StatusRunning
+	case acknowledged:
+		return StatusIdle
+	default:
+		return StatusWaiting
+	}
+}
+
 func hookFastPathFreshnessForTool(tool, hookStatus string) time.Duration {
 	if !IsCodexCompatible(tool) {
 		return hookFastPathWindow
@@ -6109,35 +6130,30 @@ func (i *Instance) UpdateStatus() error {
 				i.Status = StatusWaiting
 			} else {
 				// Claude fires its Stop hook (→ "waiting") when the FOREGROUND turn
-				// ends, even while run_in_background shells or a background agent the
-				// turn is awaiting keep running. Treat the session as still running
-				// so it stays green and the daemon emits no premature "finished"
-				// notification; it settles to waiting (and notifies) once the
-				// background work completes — so "done" means foreground AND
-				// background. BackgroundWorkPending captures the pane (the fast path
-				// has no captured content), so release i.mu around it like the
-				// GetStatus call below, then re-check for a concurrent Kill().
-				bgWorkPending := false
+				// ends, even while a background agent the turn is awaiting keeps
+				// running. Treat that session as still running so it stays green
+				// and the daemon emits no premature "finished" notification.
+				// Patch 27: background SHELLS alone do not count — a shell may
+				// never exit — so shells-only maps like a plain Stop (waiting, or
+				// idle once acknowledged) with substate background-work; see
+				// claudeStopHookStatus. BackgroundWork captures the pane (the fast
+				// path has no captured content), so release i.mu around it like
+				// the GetStatus call below, then re-check for a concurrent Kill().
+				bgWork := tmux.BackgroundWorkNone
 				if i.tmuxSession != nil && IsClaudeCompatible(i.Tool) {
 					i.mu.Unlock()
-					bgWorkPending = i.tmuxSession.BackgroundWorkPending()
+					bgWork = i.tmuxSession.BackgroundWork()
 					i.mu.Lock()
 					if i.Status == StatusStopped {
 						return nil
 					}
 				}
-				switch {
-				case bgWorkPending:
-					i.Status = StatusRunning
-				case i.tmuxSession != nil && i.tmuxSession.IsAcknowledged():
-					// Check acknowledgment: orange (waiting) vs gray (idle).
-					// Acknowledge() is called when user attaches to a session.
-					// ResetAcknowledged() is called by UpdateHookStatus on any new
-					// waiting event, and by the u key / new activity.
-					i.Status = StatusIdle
-				default:
-					i.Status = StatusWaiting
-				}
+				// Acknowledgment: orange (waiting) vs gray (idle).
+				// Acknowledge() is called when user attaches to a session.
+				// ResetAcknowledged() is called by UpdateHookStatus on any new
+				// waiting event, and by the u key / new activity.
+				acked := i.tmuxSession != nil && i.tmuxSession.IsAcknowledged()
+				i.Status = claudeStopHookStatus(bgWork, acked)
 			}
 		case "dead":
 			i.Status = StatusError

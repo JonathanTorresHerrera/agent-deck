@@ -49,6 +49,14 @@ const (
 	// formed there (see internal/session/usagelimit.go, #1802) and surfaced
 	// through Instance.Substate rather than ClassifySubstate.
 	SubstateUsageLimit Substate = "usage-limit"
+
+	// SubstateBackgroundWork (Patch 27) marks a Claude session whose turn is
+	// done and which is sitting at its prompt with only run_in_background
+	// SHELLS still running ("N shells still running" / footer "· N shells ·").
+	// Pairs with status "waiting"/"idle": a shell may be a dev server that
+	// never exits, so it must not hold the session green. An awaited
+	// background AGENT is not this substate; that session stays "running".
+	SubstateBackgroundWork Substate = "background-work"
 )
 
 // modelUnavailableSubstrings are fragments of the Fable/model-down no-op the
@@ -84,8 +92,10 @@ const crunchedNoopMarker = "Crunched for 0s"
 //     "unavailable" line is stale. Deliberately does NOT treat a bare "✶" as a
 //     cue, so the no-op completion line's decorative asterisk does not match.
 //  3. model-unavailable — the Fable-down no-op loop with no live busy cue.
-//  4. idle-at-empty-prompt — sitting at the prompt with nothing happening.
-//  5. none      — no distinct refinement.
+//  4. background-work — (Patch 27) turn done, only background shells still
+//     running. An awaited background agent does not qualify (falls through).
+//  5. idle-at-empty-prompt — sitting at the prompt with nothing happening.
+//  6. none      — no distinct refinement.
 func (d *PromptDetector) ClassifySubstate(content string) Substate {
 	if d.tool != "claude" {
 		return SubstateNone
@@ -113,7 +123,13 @@ func (d *PromptDetector) ClassifySubstate(content string) Substate {
 		return SubstateModelUnavailable
 	}
 
-	// 4. Sitting at the input prompt with no busy/error signal = genuinely idle.
+	// Patch 27: turn done with only background shells left. Agent pending is
+	//    deliberately excluded: that session is still working (status running).
+	if claudeBackgroundWorkKind(content) == BackgroundWorkShells {
+		return SubstateBackgroundWork
+	}
+
+	// 5. Sitting at the input prompt with no busy/error signal = genuinely idle.
 	if d.hasClaudePrompt(content) {
 		return SubstateIdleAtEmptyPrompt
 	}

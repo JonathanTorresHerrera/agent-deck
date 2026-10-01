@@ -138,7 +138,8 @@ func bootedState(st session.Status, sub session.Substate) bool {
 		return true
 	}
 	switch sub {
-	case session.SubstateRunning, session.SubstateIdleAtEmptyPrompt:
+	// Patch 27: background-work is also an agent at its prompt, so booted.
+	case session.SubstateRunning, session.SubstateIdleAtEmptyPrompt, session.SubstateBackgroundWork:
 		return true
 	}
 	return false

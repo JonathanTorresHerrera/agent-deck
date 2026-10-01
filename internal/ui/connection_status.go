@@ -23,6 +23,25 @@ func connectionStatusLine(archived bool, status session.Status) (text string, st
 	}
 }
 
+// claudeConnectionStatusLine is connectionStatusLine for the Claude preview
+// section, which also knows the substate. Patch 27: a session whose turn is done
+// with only background shells still running reads "◌ Connected · bg shells", so
+// the preview explains the ◌ row glyph. Gated like the glyph (waiting/idle only)
+// so a stale cached substate cannot relabel a running session.
+func claudeConnectionStatusLine(archived bool, status session.Status, substate session.Substate) (text string, style lipgloss.Style) {
+	if !archived && isBackgroundWorkRow(status, substate) {
+		return "◌ Connected · bg shells", SessionStatusBackgroundWork.Bold(true)
+	}
+	return connectionStatusLine(archived, status)
+}
+
+// isBackgroundWorkRow reports whether a row shows the Patch 27 background-work
+// state: substate background-work on a settled (waiting/idle) session.
+func isBackgroundWorkRow(status session.Status, substate session.Substate) bool {
+	return substate == session.SubstateBackgroundWork &&
+		(status == session.StatusWaiting || status == session.StatusIdle)
+}
+
 // rowStatusGlyph decides the session-list row status indicator (glyph + style).
 //
 // The coarse status comes from a render snapshot of the session's last-known
@@ -68,6 +87,14 @@ func rowStatusGlyph(status session.Status, substate session.Substate, archived b
 	// releases the hold), so this cannot resurrect a stale glyph.
 	if status == session.StatusStopped && substate == session.SubstateAuth401 {
 		icon = "🔒"
+	}
+
+	// Patch 27: turn done, only background shells still running. The session
+	// counts as waiting/idle (header counts unchanged), but gets its own glyph
+	// and colour so "paused with a dev server up" is not mistaken for either a
+	// working session (green ●) or a plain finished one (yellow ◐).
+	if isBackgroundWorkRow(status, substate) {
+		icon, style = "◌", SessionStatusBackgroundWork
 	}
 
 	if archived {
