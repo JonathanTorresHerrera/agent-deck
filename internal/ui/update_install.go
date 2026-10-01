@@ -23,6 +23,11 @@ import (
 // a successful install flips the banner straight to "vX installed, press
 // ctrl+t to restart" without the user reopening anything.
 
+// Patch 30 (fork update guard). A var so tests can exercise the stock path.
+var forkInstallBlocked = true
+
+const forkInstallBlockedMsg = "install blocked: custom fork build; new versions are merged by a merge session (ADK-FORK-BUILD)"
+
 // updateInstallFinishedMsg is delivered when `<exe> update` exits.
 type updateInstallFinishedMsg struct {
 	err error
@@ -75,6 +80,13 @@ func (h *Home) installBlockReason() string {
 
 // tryInstallUpdate is the install_update key handler.
 func (h *Home) tryInstallUpdate() (tea.Model, tea.Cmd) {
+	// Patch 30 (fork update guard): this build is a custom fork; an in-place
+	// upstream install would drop its patches. New versions go through a merge
+	// session instead (see cmd/agent-deck/fork_update_guard.go).
+	if forkInstallBlocked {
+		h.setError(errors.New(forkInstallBlockedMsg))
+		return h, nil
+	}
 	if reason := h.installBlockReason(); reason != "" {
 		h.setError(errors.New("install blocked: " + reason))
 		return h, nil
