@@ -354,22 +354,24 @@ type Home struct {
 	contextReportCache map[string]contextReportEntry
 
 	// State
-	cursor              int                    // Selected item index in flatItems
-	viewOffset          int                    // First visible item index (for scrolling)
-	previewScrollOffset int                    // Lines scrolled up from tail in the preview pane (#574). 0 = tail (default). Reset on cursor move.
-	isAttaching         atomic.Bool            // Prevents View() output during attach (fixes Bubble Tea Issue #431) - atomic for thread safety
-	lastRenderedFrame   string                 // Last non-empty frame View produced; re-served while isAttaching so no frame is ever black (#1753). Event-loop goroutine only.
-	statusFilter        session.Status         // Filter sessions by status ("" = all, or specific status)
-	groupScope          string                 // Limit TUI to a specific group path ("" = all groups)
-	initialSelect       string                 // Session ID or title to preselect on first load (#709). Does NOT scope groups.
-	initialSelectDone   bool                   // Guard so preselection only fires once
-	previewMode         PreviewMode            // What to show in preview pane (both, output-only, analytics-only)
-	groupViewMode       session.GroupViewMode  // List partition: normal, active-on-top, populated-on-top (cycled by hotkey 't')
-	timeFilter          session.TimeFilterMode // Recency filter: all, today, 3 days, 7 days (cycled by hotkey '*')
-	sidebarMode         sidebarPresentation    // Session navigation: grouped (default) or flat
-	compactSidebar      bool                   // Narrow session rail; manual split resizing opts out
-	embeddedLayout      bool                   // Embedded terminal layout; false preserves classic interaction
-	sidebarDensity      string                 // Embedded sidebar rows per session: full (3), compact (2), minimal (1), auto
+	cursor              int                     // Selected item index in flatItems
+	viewOffset          int                     // First visible item index (for scrolling)
+	previewScrollOffset int                     // Lines scrolled up from tail in the preview pane (#574). 0 = tail (default). Reset on cursor move.
+	isAttaching         atomic.Bool             // Prevents View() output during attach (fixes Bubble Tea Issue #431) - atomic for thread safety
+	lastRenderedFrame   string                  // Last non-empty frame View produced; re-served while isAttaching so no frame is ever black (#1753). Event-loop goroutine only.
+	statusFilter        session.Status          // Filter sessions by status ("" = all, or specific status)
+	hiddenStatuses      map[session.Status]bool // Patch 28: statuses toggled OFF by clicking their chip (hidden from the list; independent of statusFilter)
+	chipHitboxes        []statusChipHitbox      // Patch 28: clickable chip column ranges recorded by the last render
+	groupScope          string                  // Limit TUI to a specific group path ("" = all groups)
+	initialSelect       string                  // Session ID or title to preselect on first load (#709). Does NOT scope groups.
+	initialSelectDone   bool                    // Guard so preselection only fires once
+	previewMode         PreviewMode             // What to show in preview pane (both, output-only, analytics-only)
+	groupViewMode       session.GroupViewMode   // List partition: normal, active-on-top, populated-on-top (cycled by hotkey 't')
+	timeFilter          session.TimeFilterMode  // Recency filter: all, today, 3 days, 7 days (cycled by hotkey '*')
+	sidebarMode         sidebarPresentation     // Session navigation: grouped (default) or flat
+	compactSidebar      bool                    // Narrow session rail; manual split resizing opts out
+	embeddedLayout      bool                    // Embedded terminal layout; false preserves classic interaction
+	sidebarDensity      string                  // Embedded sidebar rows per session: full (3), compact (2), minimal (1), auto
 	err                 error
 	errTime             time.Time  // When error occurred (for auto-dismiss)
 	isReloading         bool       // Visual feedback during auto-reload
@@ -3378,6 +3380,13 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		h.flatItems = allItems
 	}
 
+	// Patch 28 (status chips): hide sessions whose status chip was clicked off.
+	// Skipped in the archived view. Unlike statusFilter this never auto-clears
+	// when it hides everything: the chips stay clickable on an empty list.
+	if len(h.hiddenStatuses) > 0 && !viewArchived {
+		h.flatItems = h.applyHiddenStatuses(h.flatItems)
+	}
+
 	// Use one remote snapshot for recency fallback and row construction.
 	h.remoteSessionsMu.RLock()
 	remoteNames := make([]string, 0, len(h.remoteSessions))
@@ -3397,7 +3406,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				partitioned = append(partitioned, remote)
 			}
 		}
-		plainActiveView := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == ""
+		plainActiveView := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" && len(h.hiddenStatuses) == 0
 		if len(partitioned) == 0 && !plainActiveView {
 			continue
 		}
@@ -3426,6 +3435,9 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 					continue
 				}
 				if h.statusFilter != "" && !viewArchived && !h.matchesStatusFilter(h.statusFilter, inst.Status) {
+					continue
+				}
+				if !viewArchived && h.statusHidden(inst.Status) {
 					continue
 				}
 				hasCandidates = true
@@ -3576,7 +3588,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 			// the remote's own group order to the group headers. In the plain
 			// active view, empty remote groups get a header row too, like an
 			// empty local group; any filter or the archived view hides them.
-			showEmptyGroups := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == ""
+			showEmptyGroups := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" && len(h.hiddenStatuses) == 0
 			rows := buildRemoteFlatItemsWithEmptyGroups(remoteName, sessions, collapsed, h.remoteSessionOrder.forRemote(remoteName), remoteGroupLists[remoteName], showEmptyGroups)
 			for _, row := range rows {
 				// An empty group's header has no session to count; give it
@@ -10342,6 +10354,11 @@ func (h *Home) clearFiltersHiding(inst *session.Instance) string {
 		h.timeFilter = session.TimeFilterAll
 		names = append(names, "time filter")
 	}
+	// Patch 28: a status chip toggled off hides the match as surely as a filter.
+	if !inst.IsArchived() && h.statusHidden(inst.Status) {
+		h.clearHiddenStatuses()
+		names = append(names, "hidden status chips")
+	}
 	return strings.Join(names, " and ")
 }
 
@@ -11368,6 +11385,16 @@ func (h *Home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseButtonLeft:
 		if msg.Action != tea.MouseActionPress {
 			return h, nil
+		}
+
+		// Patch 28 (status chips): a press on a header status chip toggles it.
+		// Other header clicks (hint text, gaps) fall through and, being above
+		// the list, map to no item.
+		if h.handleStatusChipClick(msg) {
+			h.lastUserInputTime = time.Now()
+			h.previewScrollOffset = 0
+			h.syncViewport()
+			return h, h.fetchSelectedPreview() // the cursor may now sit on a different row
 		}
 
 		// Check if click is in the session list panel
@@ -13195,6 +13222,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (h *Home) changeStatusFilter(filter session.Status) tea.Cmd {
 	selectedBefore := h.captureSelectedItemIdentity()
+	h.clearHiddenStatuses() // Patch 28: filter keys and chip toggles must not fight
 	h.keepEmptyFilter = true
 	if filter != "" && h.statusFilter == filter {
 		h.statusFilter = ""
@@ -18595,8 +18623,31 @@ func (h *Home) renderFilterBar() string {
 		Faint(true).
 		Padding(0, 1)
 
-	// Build pills
+	// Build pills. Patch 28 (status chips): addPill records each pill's
+	// rendered column range so a left click can be mapped back to its chip.
 	var pills []string
+	chipX := 1 // filterRow starts with one leading space
+	addPill := func(status session.Status, all bool, rendered, pad string) {
+		w := lipgloss.Width(rendered)
+		x1 := chipX + w
+		if h.width > 0 && x1 > h.width {
+			x1 = h.width
+		}
+		if x1 > chipX {
+			h.chipHitboxes = append(h.chipHitboxes, statusChipHitbox{
+				status: status, all: all, x0: chipX, x1: x1, y: statusChipFilterBarY,
+			})
+		}
+		chipX += w + lipgloss.Width(pad) + 1 // +1: the joining space
+		pills = append(pills, rendered+pad)
+	}
+	// A chip toggled off by a click renders dimmed and struck through.
+	offPillStyle := lipgloss.NewStyle().
+		Foreground(ColorComment).
+		Background(ColorSurface).
+		Faint(true).
+		Strikethrough(true).
+		Padding(0, 1)
 
 	// The first pill names the selected status even when its count pill is
 	// farther to the right than a narrow terminal can show.
@@ -18604,102 +18655,116 @@ func (h *Home) renderFilterBar() string {
 	filterLabel := h.statusFilterLabel()
 	// Keep the existing All-pill spacing in the default view.
 	if h.statusFilter != "" {
-		pills = append(pills, activePillStyle.Render(filterLabel))
+		addPill("", true, activePillStyle.Render(filterLabel), "")
+	} else if len(h.hiddenStatuses) == 0 {
+		addPill("", true, activePillStyle.Render("All"), " ")
 	} else {
-		pills = append(pills, activePillStyle.Render("All")+" ")
+		// Patch 28: chips toggled off; clicking All shows everything again.
+		addPill("", true, dimPillStyle.Render("All"), " ")
 	}
 
 	runningLabel := fmt.Sprintf("● %d", running)
 	if h.statusFilter == session.StatusRunning {
-		pills = append(pills, lipgloss.NewStyle().
+		addPill(session.StatusRunning, false, lipgloss.NewStyle().
 			Foreground(ColorBg).
 			Background(ColorGreen).
 			Bold(true).
-			Padding(0, 1).Render(runningLabel))
+			Padding(0, 1).Render(runningLabel), "")
+	} else if h.statusHidden(session.StatusRunning) {
+		addPill(session.StatusRunning, false, offPillStyle.Render(runningLabel), "")
 	} else if isActive && h.activeFilterExcludes[session.StatusRunning] {
-		pills = append(pills, dimPillStyle.Render(runningLabel))
+		addPill(session.StatusRunning, false, dimPillStyle.Render(runningLabel), "")
 	} else if running > 0 {
-		pills = append(pills, lipgloss.NewStyle().
+		addPill(session.StatusRunning, false, lipgloss.NewStyle().
 			Foreground(ColorGreen).
 			Background(ColorSurface).
-			Padding(0, 1).Render(runningLabel))
+			Padding(0, 1).Render(runningLabel), "")
 	} else {
-		pills = append(pills, dimPillStyle.Render(runningLabel))
+		addPill(session.StatusRunning, false, dimPillStyle.Render(runningLabel), "")
 	}
 
 	waitingLabel := fmt.Sprintf("◐ %d", waiting)
 	if h.statusFilter == session.StatusWaiting {
-		pills = append(pills, lipgloss.NewStyle().
+		addPill(session.StatusWaiting, false, lipgloss.NewStyle().
 			Foreground(ColorBg).
 			Background(ColorYellow).
 			Bold(true).
-			Padding(0, 1).Render(waitingLabel))
+			Padding(0, 1).Render(waitingLabel), "")
+	} else if h.statusHidden(session.StatusWaiting) {
+		addPill(session.StatusWaiting, false, offPillStyle.Render(waitingLabel), "")
 	} else if isActive && h.activeFilterExcludes[session.StatusWaiting] {
-		pills = append(pills, dimPillStyle.Render(waitingLabel))
+		addPill(session.StatusWaiting, false, dimPillStyle.Render(waitingLabel), "")
 	} else if waiting > 0 {
-		pills = append(pills, lipgloss.NewStyle().
+		addPill(session.StatusWaiting, false, lipgloss.NewStyle().
 			Foreground(ColorYellow).
 			Background(ColorSurface).
-			Padding(0, 1).Render(waitingLabel))
+			Padding(0, 1).Render(waitingLabel), "")
 	} else {
-		pills = append(pills, dimPillStyle.Render(waitingLabel))
+		addPill(session.StatusWaiting, false, dimPillStyle.Render(waitingLabel), "")
 	}
 
 	idleLabel := fmt.Sprintf("○ %d", idle)
 	if h.statusFilter == session.StatusIdle {
-		pills = append(pills, lipgloss.NewStyle().
+		addPill(session.StatusIdle, false, lipgloss.NewStyle().
 			Foreground(ColorBg).
 			Background(ColorTextDim).
 			Bold(true).
-			Padding(0, 1).Render(idleLabel))
+			Padding(0, 1).Render(idleLabel), "")
+	} else if h.statusHidden(session.StatusIdle) {
+		addPill(session.StatusIdle, false, offPillStyle.Render(idleLabel), "")
 	} else if isActive && h.activeFilterExcludes[session.StatusIdle] {
-		pills = append(pills, dimPillStyle.Render(idleLabel))
+		addPill(session.StatusIdle, false, dimPillStyle.Render(idleLabel), "")
 	} else if idle == 0 {
-		pills = append(pills, dimPillStyle.Render(idleLabel))
+		addPill(session.StatusIdle, false, dimPillStyle.Render(idleLabel), "")
 	} else {
-		pills = append(pills, lipgloss.NewStyle().
+		addPill(session.StatusIdle, false, lipgloss.NewStyle().
 			Foreground(ColorText).
 			Background(ColorSurface).
-			Padding(0, 1).Render(idleLabel))
+			Padding(0, 1).Render(idleLabel), "")
 	}
 
 	// Stopped pill (issue #953): manually-stopped sessions deserve their own
 	// affordance — they're not errors, they're intentional. Render-only-if
 	// non-zero or actively filtered, mirroring the error pill's pattern, so
-	// the bar stays compact when no stopped sessions exist.
-	if stopped > 0 || h.statusFilter == session.StatusStopped {
+	// the bar stays compact when no stopped sessions exist. A chip the user
+	// toggled off stays visible so it can be clicked back on.
+	if stopped > 0 || h.statusFilter == session.StatusStopped || h.statusHidden(session.StatusStopped) {
 		stoppedLabel := fmt.Sprintf("■ %d", stopped)
 		if h.statusFilter == session.StatusStopped {
-			pills = append(pills, lipgloss.NewStyle().
+			addPill(session.StatusStopped, false, lipgloss.NewStyle().
 				Foreground(ColorBg).
 				Background(ColorTextDim).
 				Bold(true).
-				Padding(0, 1).Render(stoppedLabel))
+				Padding(0, 1).Render(stoppedLabel), "")
+		} else if h.statusHidden(session.StatusStopped) {
+			addPill(session.StatusStopped, false, offPillStyle.Render(stoppedLabel), "")
 		} else if isActive && h.activeFilterExcludes[session.StatusStopped] {
-			pills = append(pills, dimPillStyle.Render(stoppedLabel))
+			addPill(session.StatusStopped, false, dimPillStyle.Render(stoppedLabel), "")
 		} else if stopped > 0 {
-			pills = append(pills, lipgloss.NewStyle().
+			addPill(session.StatusStopped, false, lipgloss.NewStyle().
 				Foreground(ColorTextDim).
 				Background(ColorSurface).
-				Padding(0, 1).Render(stoppedLabel))
+				Padding(0, 1).Render(stoppedLabel), "")
 		}
 	}
 
-	if errored > 0 || h.statusFilter == session.StatusError {
+	if errored > 0 || h.statusFilter == session.StatusError || h.statusHidden(session.StatusError) {
 		errorLabel := fmt.Sprintf("✕ %d", errored)
 		if h.statusFilter == session.StatusError {
-			pills = append(pills, lipgloss.NewStyle().
+			addPill(session.StatusError, false, lipgloss.NewStyle().
 				Foreground(ColorBg).
 				Background(ColorRed).
 				Bold(true).
-				Padding(0, 1).Render(errorLabel))
+				Padding(0, 1).Render(errorLabel), "")
+		} else if h.statusHidden(session.StatusError) {
+			addPill(session.StatusError, false, offPillStyle.Render(errorLabel), "")
 		} else if isActive && h.activeFilterExcludes[session.StatusError] {
-			pills = append(pills, dimPillStyle.Render(errorLabel))
+			addPill(session.StatusError, false, dimPillStyle.Render(errorLabel), "")
 		} else if errored > 0 {
-			pills = append(pills, lipgloss.NewStyle().
+			addPill(session.StatusError, false, lipgloss.NewStyle().
 				Foreground(ColorRed).
 				Background(ColorSurface).
-				Padding(0, 1).Render(errorLabel))
+				Padding(0, 1).Render(errorLabel), "")
 		}
 	}
 
@@ -18998,6 +19063,7 @@ func (h *Home) renderFrame() string {
 	// HEADER BAR
 	// ═══════════════════════════════════════════════════════════════════
 	// Calculate real session status counts for logo and stats
+	h.chipHitboxes = h.chipHitboxes[:0] // patch 28: re-recorded by this render
 	running, waiting, idle, stopped, errored := h.countSessionStatuses()
 	logo := RenderLogoCompact(running, waiting, idle)
 
@@ -19040,38 +19106,27 @@ func (h *Home) renderFrame() string {
 	var statsParts []string
 	statsSep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" • ")
 
-	if headerFieldSet[session.PreviewFieldSessionsByStatus] && running > 0 {
-		statsParts = append(
-			statsParts,
-			lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("● %d running", running)),
-		)
+	// Patch 28 (status chips): each per-status segment is a click target, so
+	// remember which status every statsParts entry stands for. A segment the
+	// user toggled off renders dimmed and struck through.
+	var statsKinds []session.Status
+	addStat := func(status session.Status, count int, text string, style lipgloss.Style) {
+		if count <= 0 || !headerFieldSet[session.PreviewFieldSessionsByStatus] {
+			return
+		}
+		if h.statusHidden(status) {
+			style = lipgloss.NewStyle().Foreground(ColorComment).Faint(true).Strikethrough(true)
+		}
+		statsParts = append(statsParts, style.Render(text))
+		statsKinds = append(statsKinds, status)
 	}
-	if headerFieldSet[session.PreviewFieldSessionsByStatus] && waiting > 0 {
-		statsParts = append(
-			statsParts,
-			lipgloss.NewStyle().Foreground(ColorYellow).Render(fmt.Sprintf("◐ %d waiting", waiting)),
-		)
-	}
-	if headerFieldSet[session.PreviewFieldSessionsByStatus] && idle > 0 {
-		statsParts = append(
-			statsParts,
-			lipgloss.NewStyle().Foreground(ColorText).Render(fmt.Sprintf("○ %d idle", idle)),
-		)
-	}
-	if headerFieldSet[session.PreviewFieldSessionsByStatus] && stopped > 0 {
-		// Issue #953: stopped sessions get their own segment so users can see
-		// at a glance how many sessions are intentionally off vs. errored.
-		statsParts = append(
-			statsParts,
-			lipgloss.NewStyle().Foreground(ColorTextDim).Render(fmt.Sprintf("■ %d stopped", stopped)),
-		)
-	}
-	if headerFieldSet[session.PreviewFieldSessionsByStatus] && errored > 0 {
-		statsParts = append(
-			statsParts,
-			lipgloss.NewStyle().Foreground(ColorRed).Render(fmt.Sprintf("✕ %d error", errored)),
-		)
-	}
+	addStat(session.StatusRunning, running, fmt.Sprintf("● %d running", running), lipgloss.NewStyle().Foreground(ColorGreen))
+	addStat(session.StatusWaiting, waiting, fmt.Sprintf("◐ %d waiting", waiting), lipgloss.NewStyle().Foreground(ColorYellow))
+	addStat(session.StatusIdle, idle, fmt.Sprintf("○ %d idle", idle), lipgloss.NewStyle().Foreground(ColorText))
+	// Issue #953: stopped sessions get their own segment so users can see
+	// at a glance how many sessions are intentionally off vs. errored.
+	addStat(session.StatusStopped, stopped, fmt.Sprintf("■ %d stopped", stopped), lipgloss.NewStyle().Foreground(ColorTextDim))
+	addStat(session.StatusError, errored, fmt.Sprintf("✕ %d error", errored), lipgloss.NewStyle().Foreground(ColorRed))
 
 	// Fallback if no sessions
 	stats := ""
@@ -19200,6 +19255,29 @@ func (h *Home) renderFrame() string {
 		headerLeft, versionFits = assembleHeaderLeft(logo, title, stats, statsCompact, statsSep, optionalSegments, versionBadge, h.width)
 	}
 	_ = versionFits // best-effort below this point; an unreasonably narrow terminal still gets a legible (if cramped) header
+
+	// Patch 28: summary-line hitboxes. Header content starts after the bar's
+	// 1-column left padding, then logo + 2 spaces + title + 2 spaces, then the
+	// segments joined by statsSep. Widths are measured from what was rendered.
+	// assembleHeaderLeft may have collapsed the counts to one total
+	// (statsCompact); then there is nothing per-status to click.
+	if stats != "" && strings.Contains(headerLeft, stats) && lipgloss.Height(logo) == 1 && lipgloss.Height(title) == 1 {
+		sx := 1 + lipgloss.Width(logo) + 2 + lipgloss.Width(title) + 2
+		sepW := lipgloss.Width(statsSep)
+		for i, part := range statsParts {
+			w := lipgloss.Width(part)
+			x1 := sx + w
+			if h.width > 0 && x1 > h.width {
+				x1 = h.width
+			}
+			if x1 > sx && i < len(statsKinds) {
+				h.chipHitboxes = append(h.chipHitboxes, statusChipHitbox{
+					status: statsKinds[i], x0: sx, x1: x1, y: statusChipSummaryY,
+				})
+			}
+			sx += w + sepW
+		}
+	}
 
 	headerPadding := h.width - lipgloss.Width(headerLeft) - lipgloss.Width(versionBadge) - 2
 	if headerPadding < 1 {
