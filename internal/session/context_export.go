@@ -267,11 +267,36 @@ func canonicalClaudeExactTranscriptPath(inst *Instance) (string, error) {
 	if workingDir == "" {
 		return "", fmt.Errorf("source Claude effective working directory is empty")
 	}
-	encoded := ConvertToClaudeDirName(workingDir)
-	if encoded == "" {
-		encoded = "-"
+	// claude.exe keys its project directory from the WINDOWS spelling of the launch cwd (D--Dev-Projects-x) while
+	// a WSL deck knows the same directory as /mnt/d/Dev_Projects/x (-mnt-d-Dev-Projects-x). Both spellings name
+	// one directory under one account, so trying the host spelling is not a search across accounts or projects:
+	// the first spelling whose transcript exists is the exact path, and the distro spelling stays the answer (and
+	// the callers' error) when neither exists. Before this, every switch-account of a Windows-launched Claude
+	// session failed on a missing source transcript (Jev rotation, 2026-10-01).
+	// Windows drive letters are case-insensitive and claude.exe spells them upper-case (D--...), while the mount keeps
+	// the lower-case letter (/mnt/d -> d:...): try the upper-case spelling first, then the mount spelling.
+	candidates := []string{workingDir}
+	for _, spelling := range hostPathSpellings(workingDir) {
+		if len(spelling) >= 2 && spelling[1] == ':' && spelling[0] >= 'a' && spelling[0] <= 'z' {
+			candidates = append(candidates, strings.ToUpper(spelling[:1])+spelling[1:])
+		}
+		candidates = append(candidates, spelling)
 	}
-	path := filepath.Join(dir, "projects", encoded, inst.ClaudeSessionID+".jsonl")
+	var path string
+	for i, spelling := range candidates {
+		encoded := ConvertToClaudeDirName(spelling)
+		if encoded == "" {
+			encoded = "-"
+		}
+		candidate := filepath.Join(dir, "projects", encoded, inst.ClaudeSessionID+".jsonl")
+		if i == 0 {
+			path = candidate
+		}
+		if _, statErr := os.Lstat(candidate); statErr == nil {
+			path = candidate
+			break
+		}
+	}
 	if err := ensureNoSymlinkPath(path); err != nil {
 		return "", fmt.Errorf("unsafe exact Claude source path: %w", err)
 	}
