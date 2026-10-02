@@ -1585,6 +1585,11 @@ type PreviewSettings struct {
 	// in the preview pane when output is visible.
 	// Range: 0.1 - 0.9 (fraction reserved for notes). Default: 0.33
 	NotesOutputSplit float64 `toml:"notes_output_split,omitzero"`
+
+	// CollapsedSections lists the preview-pane sections the user collapsed with
+	// a click on their divider. Global (not per session). Keys: "agent",
+	// "analytics", "notes", "output". Patch 38 (responsive).
+	CollapsedSections []string `toml:"collapsed_sections,omitempty"`
 }
 
 // AnalyticsDisplaySettings configures which analytics sections to display
@@ -3848,6 +3853,12 @@ type DisplaySettings struct {
 	// ShowEmptyGroups keeps groups with zero sessions (recursive, in the
 	// rendered archive partition) visible in the list. Default: false (hidden).
 	ShowEmptyGroups bool `toml:"show_empty_groups,omitempty"`
+
+	// ShowAidaSuffix shows the literal " (Aida)" suffix that sessions launched
+	// by Aida via agent-deck-mcp carry on their title. Default: false (hidden
+	// in the SESSIONS list rows only; the stored title is never modified).
+	// Patch 38 (responsive).
+	ShowAidaSuffix bool `toml:"show_aida_suffix,omitempty"`
 }
 
 // Patch 31 (settings density): list density values for [display] density.

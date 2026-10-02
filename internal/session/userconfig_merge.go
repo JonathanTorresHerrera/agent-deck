@@ -121,6 +121,13 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 	merged.Display.ShowToolLabel = panel.Display.ShowToolLabel
 	merged.Display.ShowInheritedAccount = panel.Display.ShowInheritedAccount
 	merged.Display.ShowEmptyGroups = panel.Display.ShowEmptyGroups
+	// Patch 38 (responsive): "(Aida)" title-suffix toggle. Must be copied or the
+	// panel's value is silently dropped on save.
+	merged.Display.ShowAidaSuffix = panel.Display.ShowAidaSuffix
+	// Patch 38 (responsive): [preview] collapsed_sections is NOT panel-managed.
+	// It is written straight to disk by the TUI (persistCollapsedSections), and
+	// merged starts from the on-disk config, so the disk value survives a panel
+	// save untouched. Deliberately not overlaid from the panel.
 
 	// ── UI subset (panel manages embedded terminal and show_only_installed_tools;
 	//    hidden_tools is edited via ToolVisibilityPanel) ──────────────────────────

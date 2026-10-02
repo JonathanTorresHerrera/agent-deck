@@ -30,12 +30,13 @@ func TestStoredAccountWidthMatrix(t *testing.T) {
 						require.NotContains(t, line, "\a")
 						require.NotContains(t, line, "\r")
 						require.NotContains(t, line, "\n")
-						// The title cell is never squeezed to nothing to make
-						// room for the account badge (#2201): the badge is
-						// the first thing shortened, then dropped, instead.
-						require.Contains(t, line, "Title", "title must stay visible even in a narrow column")
-						if width >= 48 {
-							require.Contains(t, line, "[account:")
+						// Patch 38 (responsive): title first. The compact " @slot" tag only
+						// gets leftover width and is dropped whole when it does not fit, so it
+						// is only guaranteed on a wide row with a short slot; it is never a
+						// stub (no ellipsized "@pers…") and the old long form is gone.
+						require.NotContains(t, line, "[account:")
+						if width >= 120 && cellWidth(slot) < 40 {
+							require.Contains(t, line, " @")
 						}
 					}
 				})

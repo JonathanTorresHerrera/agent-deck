@@ -63,9 +63,9 @@ func TestAccountSlotsConfigurationTransition(t *testing.T) {
 					h.renderSessionItem(&row, h.flatItems[i], selected, h.getSessionRenderSnapshot(), 240)
 					require.Contains(t, row.String(), "cached title")
 					if inst == inherited && !tc.configured {
-						require.NotContains(t, row.String(), "[account:")
+						require.NotContains(t, row.String(), "@") // Patch 38: compact row tag
 					} else {
-						require.Contains(t, row.String(), strings.TrimSpace(want.accountDisplay.badge))
+						require.Contains(t, row.String(), strings.TrimSpace(want.accountDisplay.compact)) // Patch 38: compact row tag
 					}
 				}
 				card := h.renderSessionInfoCard(inst, 240, 40)

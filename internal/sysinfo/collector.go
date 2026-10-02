@@ -28,6 +28,15 @@ func NewCollector(intervalSeconds int, onUpdate func()) *Collector {
 	}
 }
 
+// NewStaticCollector returns a collector that is never started and always
+// reports the given snapshot. Patch 38 (responsive): lets UI tests render a
+// header with known system stats.
+func NewStaticCollector(stats Stats) *Collector {
+	c := NewCollector(0, nil)
+	c.stats = stats
+	return c
+}
+
 // Start begins the background collection goroutine.
 //
 // Everything — the one-time GPU probe and the initial collection — runs inside

@@ -20,6 +20,7 @@ func (h *Home) applyListDisplaySettings(d session.DisplaySettings) {
 	h.showToolLabel = d.ShowToolLabel
 	h.showInheritedAccount = d.ShowInheritedAccount
 	h.showEmptyGroups = d.ShowEmptyGroups
+	h.showAidaSuffix = d.ShowAidaSuffix // Patch 38 (responsive)
 }
 
 // density returns the resolved list density. A zero-value Home (tests, or a

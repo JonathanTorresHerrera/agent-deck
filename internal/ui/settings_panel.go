@@ -57,6 +57,7 @@ const (
 	SettingShowToolLabel
 	SettingShowInheritedAccount
 	SettingShowEmptyGroups
+	SettingShowAidaSuffix // Patch 38 (responsive)
 	SettingPreviewPct
 	SettingPreviewOrientation
 	SettingShowOnlyInstalledTools
@@ -67,7 +68,7 @@ const (
 )
 
 // Total number of navigable settings.
-const settingsCount = 45
+const settingsCount = 46
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -131,8 +132,9 @@ type SettingsPanel struct {
 	showToolLabel        bool
 	showInheritedAccount bool
 	showEmptyGroups      bool
-	previewPct           int // 10-90, step 5
-	previewOrientation   int // index into previewOrientationValues
+	showAidaSuffix       bool // Patch 38 (responsive)
+	previewPct           int  // 10-90, step 5
+	previewOrientation   int  // index into previewOrientationValues
 
 	// Text input state
 	editingText bool
@@ -419,6 +421,7 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 	s.showToolLabel = config.Display.ShowToolLabel
 	s.showInheritedAccount = config.Display.ShowInheritedAccount
 	s.showEmptyGroups = config.Display.ShowEmptyGroups
+	s.showAidaSuffix = config.Display.ShowAidaSuffix
 	s.previewPct = config.UI.GetPreviewPct()
 	s.previewOrientation = 0
 	for i, val := range previewOrientationValues {
@@ -584,6 +587,7 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	config.Display.ShowToolLabel = s.showToolLabel
 	config.Display.ShowInheritedAccount = s.showInheritedAccount
 	config.Display.ShowEmptyGroups = s.showEmptyGroups
+	config.Display.ShowAidaSuffix = s.showAidaSuffix
 	config.UI.PreviewPct = s.previewPct
 	if s.previewOrientation >= 0 && s.previewOrientation < len(previewOrientationValues) {
 		config.UI.PreviewOrientation = previewOrientationValues[s.previewOrientation]
@@ -945,6 +949,10 @@ func (s *SettingsPanel) toggleValue() bool {
 
 	case SettingShowEmptyGroups:
 		s.showEmptyGroups = !s.showEmptyGroups
+		return true
+
+	case SettingShowAidaSuffix: // Patch 38 (responsive)
+		s.showAidaSuffix = !s.showAidaSuffix
 		return true
 
 	case SettingEmbeddedTerminal:
@@ -1372,6 +1380,13 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n")
 
+	// Patch 38 (responsive)
+	line = s.renderCheckbox("Show \"(Aida)\" title suffix", s.showAidaSuffix) + " - on Aida-launched sessions"
+	if s.cursor == int(SettingShowAidaSuffix) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
 	line = s.renderNumber("Preview split:", s.previewPct, "% preview")
 	if s.cursor == int(SettingPreviewPct) {
 		line = highlightStyle.Render(line)
@@ -1523,13 +1538,14 @@ func (s *SettingsPanel) View() string {
 			62, // SettingShowToolLabel
 			63, // SettingShowInheritedAccount
 			64, // SettingShowEmptyGroups
-			65, // SettingPreviewPct
-			66, // SettingPreviewOrientation
-			69, // SettingShowOnlyInstalledTools (TOOL PICKER section)
-			70, // SettingVisibleTools
-			73, // SettingEmbeddedTerminal (INTERFACE section)
-			74, // SettingSidebarDensity
-			79, // SettingPrivacy (PRIVACY section)
+			65, // SettingShowAidaSuffix (Patch 38)
+			66, // SettingPreviewPct
+			67, // SettingPreviewOrientation
+			70, // SettingShowOnlyInstalledTools (TOOL PICKER section)
+			71, // SettingVisibleTools
+			74, // SettingEmbeddedTerminal (INTERFACE section)
+			75, // SettingSidebarDensity
+			80, // SettingPrivacy (PRIVACY section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 

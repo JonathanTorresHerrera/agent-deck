@@ -39,7 +39,13 @@ func TestStoredAccountRenderBaseline(t *testing.T) {
 						var b strings.Builder
 						h.renderSessionItem(&b, session.Item{Type: session.ItemTypeSession, Session: inst, Level: 1, Path: "work", IsLastInGroup: true}, selected, h.getSessionRenderSnapshot(), 240)
 						row := b.String()
-						require.Contains(t, row, "[account:"+label+"]", "stored slot must be visible on each session row")
+						// Patch 38 (responsive): the row shows the compact " @label" tag (the
+						// strconv-escaped slot without its quotes), not " [account:...]".
+						compact := "@inherited"
+						if account != "" {
+							compact = "@" + label[1:len(label)-1]
+						}
+						require.Contains(t, row, compact, "stored slot must be visible on each session row")
 						require.Equal(t, 1, strings.Count(row, "\n"), "account controls cannot add logical rows")
 						require.NotContains(t, row, "\x1b]0;injected")
 						require.NotContains(t, row, "\a")

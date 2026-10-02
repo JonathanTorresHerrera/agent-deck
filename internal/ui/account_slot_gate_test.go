@@ -33,7 +33,8 @@ func TestInheritedBadgeHiddenWithoutConfiguredSlots(t *testing.T) {
 				var b strings.Builder
 				h.renderSessionItem(&b, session.Item{Type: session.ItemTypeSession, Session: inst, Level: 1, Path: "work", IsLastInGroup: true}, selected, h.getSessionRenderSnapshot(), 240)
 				row := b.String()
-				require.NotContains(t, row, "[account:", "no configured slots means no account badge")
+				// Patch 38 (responsive): rows now carry the compact " @slot" tag, not " [account:...]".
+				require.NotContains(t, row, "@", "no configured slots means no account badge")
 				require.NotContains(t, row, "inherited")
 				require.Contains(t, row, "no-slot-session", "suppressing the badge must not disturb the title")
 				require.Equal(t, 1, strings.Count(row, "\n"))
@@ -59,7 +60,7 @@ func TestExplicitSlotStillRendersWithoutConfiguredSlots(t *testing.T) {
 
 	var b strings.Builder
 	h.renderSessionItem(&b, session.Item{Type: session.ItemTypeSession, Session: inst, Level: 1, Path: "work", IsLastInGroup: true}, false, h.getSessionRenderSnapshot(), 240)
-	require.Contains(t, b.String(), `[account:"work"]`)
+	require.Contains(t, b.String(), "@work") // Patch 38: compact row tag
 	require.Contains(t, h.renderSessionInfoCard(inst, 240, 40), "Account slot:")
 }
 
@@ -77,8 +78,8 @@ func TestBadgeReturnsWhenSlotsAreConfigured(t *testing.T) {
 	h.refreshSessionRenderSnapshot([]*session.Instance{inherited, pinned})
 
 	for inst, want := range map[*session.Instance]string{
-		inherited: "[account:inherited]",
-		pinned:    `[account:"personal"]`,
+		inherited: "@inherited", // Patch 38: compact row tag
+		pinned:    "@personal",
 	} {
 		var b strings.Builder
 		h.renderSessionItem(&b, session.Item{Type: session.ItemTypeSession, Session: inst, Level: 1, Path: "work", IsLastInGroup: true}, false, h.getSessionRenderSnapshot(), 240)

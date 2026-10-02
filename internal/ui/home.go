@@ -382,6 +382,17 @@ type Home struct {
 	reloadMu            sync.Mutex // Protects reloadVersion, isReloading, and lastLoadMtime for thread-safe access
 	lastLoadMtime       time.Time  // File mtime when we last loaded (for external change detection)
 
+	// Patch 38 (responsive): collapsible preview sections. collapsedSections is
+	// global (all sessions) and persisted as [preview] collapsed_sections.
+	// previewSectionHits are the divider rows (relative to the preview content
+	// top) recorded by the last renderPreviewPane; previewPane* locate that
+	// content on screen, set by the layout that drew it.
+	collapsedSections  map[string]bool
+	previewSectionHits []previewSectionHit
+	previewPaneX       int // first screen column of the preview content
+	previewPaneDY      int // preview content top row, relative to getListContentStartY()
+	previewPaneRows    int // visible preview content rows (0: no preview drawn)
+
 	// Earliest eligible membership expiry; ordinary ticks only compare clocks.
 	nextTimeFilterExpiry time.Time
 
@@ -638,6 +649,7 @@ type Home struct {
 		running, waiting, idle, stopped, errored int
 		valid                                    atomic.Bool // THREAD-SAFE: accessed from main and worker goroutines
 		timestamp                                time.Time   // For time-based expiration
+		archived                                 bool        // Patch 38: partition the cached counts were taken for
 	}
 
 	// Status-transition tracker: emits enriched status_changed INFO,
@@ -675,6 +687,7 @@ type Home struct {
 	showToolLabel        bool            // dim " claude" tool name on each row (default off)
 	showInheritedAccount bool            // " [account:inherited]" badge (default off; named slots always show)
 	showEmptyGroups      bool            // keep zero-session groups in the list (default off)
+	showAidaSuffix       bool            // Patch 38: keep the " (Aida)" title suffix on rows (default off = stripped)
 	keptEmptyGroups      map[string]bool // groups created this run: visible even while empty
 
 	// accountSlotsConfigured mirrors len(session.ConfiguredAccountNames(cfg)) > 0,
@@ -2106,6 +2119,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		h.showSessionTimestamps = cfg.Display.ShowSessionTimestamps
 		h.showPaneTitles = cfg.Display.ShowPaneTitles
 		h.applyListDisplaySettings(cfg.Display) // Patch 31 (settings density)
+		h.loadCollapsedSections(cfg.Preview)    // Patch 38 (responsive)
 		h.sysStatsConfig = cfg.SystemStats
 		h.costLineTemplate, h.costLineHideWhenZero = session.ResolveCostLineTemplate(cfg, actualProfile)
 		h.previewPct = cfg.UI.GetPreviewPct()
@@ -5954,6 +5968,9 @@ type sessionRenderState struct {
 	// Instance.mu per row / per tick.
 	aidaAsk   session.AidaAsk
 	aidaAskOK bool
+	// Patch 38: archived at snapshot time; only the status counters read it
+	// (live archive state still wins when the instance is known).
+	archived bool
 }
 
 // shouldPersistAutoNameDesc decides whether the background status loop should
@@ -6115,6 +6132,7 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 			title:        inst.GetTitleThreadSafe(),
 			autoName:     inst.GetAutoName(),
 			autoNameDesc: inst.GetAutoNameDescription(),
+			archived:     inst.IsArchived(), // Patch 38
 		}
 		state.aidaAsk, state.aidaAskOK = inst.LastAidaAsk() // Patch 24
 		// Look up pane title from the already-refreshed tmux cache.
@@ -6168,6 +6186,7 @@ func (h *Home) getSessionRenderState(inst *session.Instance) sessionRenderState 
 		title:          inst.GetTitleThreadSafe(),
 		autoName:       inst.GetAutoName(),
 		autoNameDesc:   inst.GetAutoNameDescription(),
+		archived:       inst.IsArchived(), // Patch 38
 	}
 	state.aidaAsk, state.aidaAskOK = inst.LastAidaAsk() // Patch 24
 	return state
@@ -11333,8 +11352,11 @@ func (h *Home) handleDividerDrag(msg tea.MouseMsg) bool {
 
 	// Grab the divider only on a left-press over the separator, and only while
 	// it is live. hoverDivider is already current and already carries that
-	// condition: syncDividerHover ran for this event.
-	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress && h.hoverDivider {
+	// condition: syncDividerHover ran for this event. Patch 38 (responsive):
+	// only below the header rows, so a click on a header status chip or filter
+	// pill that sits in the separator's columns is not swallowed by the grab.
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress && h.hoverDivider &&
+		msg.Y >= h.getListContentStartY()-2 {
 		h.draggingDivider = true
 		h.lastUserInputTime = time.Now()
 		return true
@@ -11456,6 +11478,13 @@ func (h *Home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			h.previewScrollOffset = 0
 			h.syncViewport()
 			return h, h.fetchSelectedPreview() // the cursor may now sit on a different row
+		}
+
+		// Patch 38 (responsive): a press on a preview section divider folds /
+		// unfolds that section (global, persisted).
+		if h.handlePreviewSectionClick(msg) {
+			h.lastUserInputTime = time.Now()
+			return h, nil
 		}
 
 		// Check if click is in the session list panel
@@ -18586,7 +18615,10 @@ func (h *Home) importSessions() tea.Msg {
 func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored int) {
 	// Return cached values if valid and not expired
 	const cacheDuration = 500 * time.Millisecond
-	if h.cachedStatusCounts.valid.Load() &&
+	// Patch 38 (responsive): the counts follow the rendered archive partition,
+	// so a cache taken for the other partition (the ^ view just toggled) is stale.
+	archivedView := h.renderingArchivedPartition()
+	if h.cachedStatusCounts.valid.Load() && h.cachedStatusCounts.archived == archivedView &&
 		time.Since(h.cachedStatusCounts.timestamp) < cacheDuration {
 		return h.cachedStatusCounts.running, h.cachedStatusCounts.waiting,
 			h.cachedStatusCounts.idle, h.cachedStatusCounts.stopped,
@@ -18600,12 +18632,21 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 		snapshot = h.getSessionRenderSnapshot()
 	}
 	// Skip archived cross-harness sources superseded by a "Restart with new
-	// session ID": their old tmux session can still be alive, but they are
-	// hidden from list --json and must not inflate this header pill either
-	// (issue: header/status totals exceeded list --json's by the number of
-	// superseded sources still holding a live tmux process).
-	for _, state := range snapshot {
+	// session ID" (upstream), and (fork patch 38) count only sessions in the
+	// partition the list is rendering, via the shared patch-14 rule: archived
+	// sessions used to be counted in both views, so the header and the pills
+	// disagreed with what a status filter actually shows. Archive membership is
+	// read live from the instance when known, the status from the snapshot.
+	h.instancesMu.RLock()
+	for id, state := range snapshot {
 		if state.archivedSuperseded {
+			continue
+		}
+		archived := state.archived
+		if inst, ok := h.instanceByID[id]; ok {
+			archived = inst.IsArchived() // live state beats a stale snapshot
+		}
+		if !h.archivedInRenderedPartition(archived) {
 			continue
 		}
 		switch statusBucket(state.status) {
@@ -18626,6 +18667,7 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 			errored++
 		}
 	}
+	h.instancesMu.RUnlock()
 
 	// Include remote sessions (issue #1066). Remotes carry their status as a
 	// lowercase string from the remote's `agent-deck list --json` (see
@@ -18642,6 +18684,9 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 		age, known := h.remoteRowAgeLocked(name)
 		stale := known && age >= remoteRowStaleAge
 		for _, rs := range sessions {
+			if !h.archivedInRenderedPartition(rs.Archived) { // Patch 38: same rule as local rows
+				continue
+			}
 			switch statusBucket(session.Status(rs.Status)) {
 			case session.StatusRunning:
 				if stale {
@@ -18667,6 +18712,7 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 	h.cachedStatusCounts.idle = idle
 	h.cachedStatusCounts.stopped = stopped
 	h.cachedStatusCounts.errored = errored
+	h.cachedStatusCounts.archived = archivedView
 	h.cachedStatusCounts.valid.Store(true)
 	h.cachedStatusCounts.timestamp = time.Now()
 	return running, waiting, idle, stopped, errored
@@ -19167,40 +19213,9 @@ func (h *Home) renderFrame() string {
 		headerFieldSet[f] = true
 	}
 
-	// Status-based stats (more useful than group/session counts)
-	// Format: ● 2 running • ◐ 1 waiting • ○ 3 idle (• ✕ 1 error)
-	var statsParts []string
-	statsSep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" • ")
-
-	// Patch 28 (status chips): each per-status segment is a click target, so
-	// remember which status every statsParts entry stands for. A segment the
-	// user toggled off renders dimmed and struck through.
-	var statsKinds []session.Status
-	addStat := func(status session.Status, count int, text string, style lipgloss.Style) {
-		if count <= 0 || !headerFieldSet[session.PreviewFieldSessionsByStatus] {
-			return
-		}
-		if h.statusHidden(status) {
-			style = lipgloss.NewStyle().Foreground(ColorComment).Faint(true).Strikethrough(true)
-		}
-		statsParts = append(statsParts, style.Render(text))
-		statsKinds = append(statsKinds, status)
-	}
-	addStat(session.StatusRunning, running, fmt.Sprintf("● %d running", running), lipgloss.NewStyle().Foreground(ColorGreen))
-	addStat(session.StatusWaiting, waiting, fmt.Sprintf("◐ %d waiting", waiting), lipgloss.NewStyle().Foreground(ColorYellow))
-	addStat(session.StatusIdle, idle, fmt.Sprintf("○ %d idle", idle), lipgloss.NewStyle().Foreground(ColorText))
-	// Issue #953: stopped sessions get their own segment so users can see
-	// at a glance how many sessions are intentionally off vs. errored.
-	addStat(session.StatusStopped, stopped, fmt.Sprintf("■ %d stopped", stopped), lipgloss.NewStyle().Foreground(ColorTextDim))
-	addStat(session.StatusError, errored, fmt.Sprintf("✕ %d error", errored), lipgloss.NewStyle().Foreground(ColorRed))
-
-	// Fallback if no sessions
-	stats := ""
-	if len(statsParts) > 0 {
-		stats = strings.Join(statsParts, statsSep)
-	} else if headerFieldSet[session.PreviewFieldSessionsByStatus] {
-		stats = lipgloss.NewStyle().Foreground(ColorText).Render("no sessions")
-	}
+	// Patch 38 (responsive): the per-status stats segments are built by
+	// buildHeaderStats (patch38_header.go) so the header can be re-rendered at
+	// progressively lower detail until it fits the terminal width.
 
 	// Compact fallback for the base status-counts segment: a busy fleet's
 	// per-status breakdown (e.g. "● 12 running • ◐ 8 waiting • ○ 24 idle •
@@ -19210,24 +19225,6 @@ func (h *Home) renderFrame() string {
 	// badge. assembleHeaderLeft collapses to this single total before
 	// giving up any further-protected field. Mirrors renderAccountsCompactLine's
 	// "N slots" shape.
-	statsCompact := stats
-	if headerFieldSet[session.PreviewFieldSessionsByStatus] {
-		total := running + waiting + idle + stopped + errored
-		word := "session"
-		if total != 1 {
-			word = "sessions"
-		}
-		statsCompact = lipgloss.NewStyle().Foreground(ColorText).Render(fmt.Sprintf("%d %s", total, word))
-	}
-
-	// Cost tracking segment, rendered through the resolved template.
-	// See session.ResolveCostLineTemplate for the [costs] / per-profile
-	// override chain. RenderCostLine returns "" when hide_when_zero is on
-	// and every recognized variable rendered to $0.00.
-	// #1101: aggregate remote per-host summaries on top of local totals so the
-	// status-line cost segment reflects spend across every configured host,
-	// not only events written to the local cost_events table. Remotes whose
-	// fetch failed contribute zero — the local figures still render.
 	h.remoteCostsMu.RLock()
 	remoteAgg := costs.MergeRemoteCostSummaries(h.remoteCosts)
 	h.remoteCostsMu.RUnlock()
@@ -19240,22 +19237,11 @@ func (h *Home) renderFrame() string {
 		"cost_last_month": h.costLastMonth.Load() + remoteAgg.CostLastMonthMicrodollars,
 		"cost_projected":  h.costProjected.Load() + remoteAgg.CostProjectedMicrodollars,
 	}
-	var costSegment string
-	if rendered := costs.RenderCostLine(h.costLineTemplate, costVars, h.costLineHideWhenZero); rendered != "" {
-		costSegment = lipgloss.NewStyle().Foreground(ColorCyan).Render(rendered)
-	}
-
-	// System stats segment (CPU, RAM, etc.) — shown when [ui.header].fields
-	// requests any of load/memory/disk; the existing [system_stats] config
-	// still governs which of those sysinfo.Format actually renders.
-	var sysStatsSegment string
+	costRendered := costs.RenderCostLine(h.costLineTemplate, costVars, h.costLineHideWhenZero)
+	// System stats (CPU, RAM, ...) render when [ui.header].fields asks for any of
+	// load/memory/disk; [system_stats] still governs which ones sysinfo.Format
+	// shows, and fitHeaderLine1 drops them one by one before anything else.
 	headerWantsHostStats := headerFieldSet[session.PreviewFieldLoad] || headerFieldSet[session.PreviewFieldMemory] || headerFieldSet[session.PreviewFieldDisk]
-	if headerWantsHostStats && h.sysStatsCollector != nil {
-		sysStats := h.sysStatsCollector.Get()
-		if formatted := sysinfo.Format(sysStats, h.sysStatsConfig.GetFormat(), h.sysStatsConfig.GetShow()); formatted != "" {
-			sysStatsSegment = lipgloss.NewStyle().Foreground(ColorComment).Render(formatted)
-		}
-	}
 
 	// Accounts segment: named Claude account slots on this host with their
 	// live 5h/7d usage, opt-in via [ui.header].fields (not part of
@@ -19308,26 +19294,29 @@ func (h *Home) renderFrame() string {
 	// total (statsCompact) rather than falling through to MaxWidth's blind
 	// mid-text byte truncation, which used to eat the badge on a busy
 	// fleet even with every optional field off (#2301 round-2).
-	optionalSegments := []string{sysStatsSegment, costSegment, accountsSegment, sshSegment}
-	headerLeft, versionFits := assembleHeaderLeft(logo, title, stats, statsCompact, statsSep, optionalSegments, versionBadge, h.width)
-	if !versionFits {
-		// Retry with the ssh and accounts fields' compact forms before
-		// dropping them outright.
-		optionalSegments[3] = sshCompactSegment
-		headerLeft, versionFits = assembleHeaderLeft(logo, title, stats, statsCompact, statsSep, optionalSegments, versionBadge, h.width)
-	}
-	if !versionFits {
-		optionalSegments[2] = accountsCompactSegment
-		headerLeft, versionFits = assembleHeaderLeft(logo, title, stats, statsCompact, statsSep, optionalSegments, versionBadge, h.width)
-	}
-	_ = versionFits // best-effort below this point; an unreasonably narrow terminal still gets a legible (if cramped) header
 
+	// Patch 38 (responsive): degrade the header until it fits the terminal width
+	// instead of clipping the version badge or a stats segment. Upstream's opt-in
+	// ssh and accounts segments go first (compact form, then dropped), then patch
+	// 38's order: system stats one by one, the cost, then short status words.
+	hl := h.fitHeaderLine1With(logo, title, versionBadge, running, waiting, idle, stopped, errored, costRendered, headerExtras{
+		statsOn:         headerFieldSet[session.PreviewFieldSessionsByStatus],
+		sysOn:           headerWantsHostStats,
+		accounts:        accountsSegment,
+		accountsCompact: accountsCompactSegment,
+		ssh:             sshSegment,
+		sshCompact:      sshCompactSegment,
+	})
+	statsSep := hl.sep
+	statsParts, statsKinds := hl.parts, hl.kinds
+	headerLeft := hl.left
 	// Patch 28: summary-line hitboxes. Header content starts after the bar's
 	// 1-column left padding, then logo + 2 spaces + title + 2 spaces, then the
 	// segments joined by statsSep. Widths are measured from what was rendered.
 	// assembleHeaderLeft may have collapsed the counts to one total
 	// (statsCompact); then there is nothing per-status to click.
-	if stats != "" && strings.Contains(headerLeft, stats) && lipgloss.Height(logo) == 1 && lipgloss.Height(title) == 1 {
+	// The chip hitboxes follow whichever stats form fitHeaderLine1 actually drew.
+	if len(statsParts) > 0 && lipgloss.Height(logo) == 1 && lipgloss.Height(title) == 1 {
 		sx := 1 + lipgloss.Width(logo) + 2 + lipgloss.Width(title) + 2
 		sepW := lipgloss.Width(statsSep)
 		for i, part := range statsParts {
@@ -20227,7 +20216,15 @@ func (h *Home) renderDualColumnLayout(contentHeight int) string {
 	leftPanel := leftTitle + "\n" + leftContent
 
 	var rightPanel string
+	// Patch 38 (responsive): where the preview content sits on screen, for the
+	// section-divider hitboxes.
+	h.previewPaneX = leftWidth + paneSeparatorWidth
+	h.previewPaneDY = 0
+	h.previewPaneRows = panelContentHeight
 	if h.embeddedMode {
+		// The embedded terminal draws its own border around the preview, so the
+		// recorded rows would be off by one: no section collapsing there.
+		h.previewPaneRows = 0
 		innerWidth := max(1, rightWidth-2)
 		innerHeight := max(1, contentHeight-2)
 		rightContent := h.renderPreviewPane(innerWidth, innerHeight)
@@ -20342,6 +20339,10 @@ func (h *Home) renderStackedLayout(totalHeight int) string {
 
 	// Preview (full width)
 	previewTitle := h.renderPanelTitle("PREVIEW", h.width)
+	// Patch 38 (responsive): list title+content (listHeight rows) + separator.
+	h.previewPaneX = 0
+	h.previewPaneDY = listHeight + 1
+	h.previewPaneRows = previewHeight - 2
 	previewContent := h.renderPreviewPane(h.width, previewHeight-2) // -2 for title
 	previewContent = ensureExactHeight(previewContent, previewHeight-2)
 	b.WriteString(previewTitle)
@@ -20354,6 +20355,10 @@ func (h *Home) renderStackedLayout(totalHeight int) string {
 // renderSingleColumnLayout renders list only for narrow terminals (<50 cols)
 func (h *Home) renderSingleColumnLayout(totalHeight int) string {
 	var b strings.Builder
+
+	// Patch 38 (responsive): no preview pane is drawn, so no section hitboxes.
+	h.previewPaneRows = 0
+	h.previewSectionHits = h.previewSectionHits[:0]
 
 	// Full height for list
 	listHeight := totalHeight - 2 // -2 for title
@@ -22399,6 +22404,12 @@ func (h *Home) renderSessionItem(
 	// form does can block behind a mid-sweep UpdateStatus writer for seconds,
 	// scaling with visible rows (#1753 black-screen).
 	displayTitle, paneSubtitle := sessionDisplayLabelsFromState(instState)
+	// Patch 38 (responsive): hide the " (Aida)" suffix Aida-launched sessions
+	// carry, in this row only, before any width budget is computed so the
+	// reclaimed cells go to the title. inst.Title itself is never modified.
+	if !h.showAidaSuffix {
+		displayTitle = stripAidaSuffix(displayTitle)
+	}
 	// Pin marker (pin-sessions): a 📌 prefix flags any pinned row. Position in
 	// the list conveys top vs bottom; the emoji conveys "this is pinned".
 	// Prepended before the AutoName truncation budget so width accounting below
@@ -22445,7 +22456,9 @@ func (h *Home) renderSessionItem(
 	// account badge takes what is left.
 	badgeBudget := -1
 	// Patch 31 (settings density): the inherited-account tag is opt-in; a NAMED
-	// slot (non-empty stored account) always renders because it is meaningful.
+	// slot (non-empty stored account) is always eligible to render because it
+	// is meaningful. Patch 38: eligible, not guaranteed; the tag is dropped
+	// whole when the row has no room left after the title.
 	rowAccount := instState.accountDisplay
 	if instState.account == "" && !h.showInheritedAccount {
 		rowAccount = accountPresentation{}
@@ -22457,11 +22470,16 @@ func (h *Home) renderSessionItem(
 	}
 	cachedViewers, cachedViewersKnown := inst.ViewersCached()
 	viewersBadgeText, viewersWidth := fitViewersBadge(cachedViewers, cachedViewersKnown, selected, badgeBudget)
-	accountBudget := rowAccount.width
-	if badgeBudget >= 0 {
-		accountBudget = min(accountBudget, badgeBudget-viewersWidth)
+	// Patch 38 (responsive): title first. The title keeps its natural width;
+	// the compact " @account" tag only gets what is left after the title and the
+	// viewers badge, and is dropped whole (never ellipsized into a stub) when its
+	// full width does not fit. With an unconstrained listWidth it always renders.
+	accountBadge, accountWidth := "", 0
+	if rowAccount.compactWidth > 0 {
+		if listWidth <= 0 || max(0, listWidth-reserved-viewersWidth-1)-cellWidth(displayTitle) >= rowAccount.compactWidth {
+			accountBadge, accountWidth = rowAccount.compact, rowAccount.compactWidth
+		}
 	}
-	accountBadge, accountWidth := rowAccount.fit(accountBudget)
 	if accountBadge != "" {
 		accountStyle := DimStyle
 		if selected {
@@ -23469,6 +23487,7 @@ func (h *Home) renderSessionInfoCard(inst *session.Instance, width, height int) 
 // renderPreviewPane renders the right panel with live preview
 func (h *Home) renderPreviewPane(width, height int) string {
 	var b strings.Builder
+	h.previewSectionHits = h.previewSectionHits[:0] // Patch 38: re-recorded by this render
 	if h.embeddedMode && h.sessionInput != nil {
 		return h.renderEmbeddedTerminalContent(width, height)
 	}
@@ -23853,12 +23872,17 @@ func (h *Home) renderPreviewPane(width, height int) string {
 		}
 	}
 
+	// Patch 38 (responsive): the tool section (Claude/Gemini/Cursor/OpenCode/
+	// Codex/custom, one collapsible "agent" section). Snapshot what precedes it
+	// so a collapsed section can be rewound to just its divider after the
+	// branch below has rendered.
+	agentSnap := b.String()
+	agentHdr := ""
+
 	// Claude-specific info (session ID and MCPs)
 	if session.IsClaudeCompatible(selected.Tool) {
 		// Section divider for Claude info
-		claudeHeader := renderSectionDivider("Claude", width-4)
-		b.WriteString(claudeHeader)
-		b.WriteString("\n")
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Claude", width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24071,9 +24095,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Gemini-specific info (session ID)
 	if selected.Tool == "gemini" {
-		geminiHeader := renderSectionDivider("Gemini", width-4)
-		b.WriteString(geminiHeader)
-		b.WriteString("\n")
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Gemini", width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24103,9 +24125,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Cursor Agent CLI — MCP configuration for `cursor agent`
 	if selected.Tool == "cursor" {
-		cursorHeader := renderSectionDivider("Cursor", width-4)
-		b.WriteString(cursorHeader)
-		b.WriteString("\n")
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Cursor", width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24120,9 +24140,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// OpenCode-specific info (session ID)
 	if selected.Tool == "opencode" {
-		opencodeHeader := renderSectionDivider("OpenCode", width-4)
-		b.WriteString(opencodeHeader)
-		b.WriteString("\n")
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "OpenCode", width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24180,9 +24198,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Codex-specific info (session ID, detection)
 	if selected.Tool == "codex" {
-		codexHeader := renderSectionDivider("Codex", width-4)
-		b.WriteString(codexHeader)
-		b.WriteString("\n")
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Codex", width-4) // Patch 38
 
 		renderToolStatusLine(&b, selected.CodexSessionID, selected.CodexDetectedAt, true, selected.IsArchived(), selected.Status)
 		renderLaunchModelInfoLines(&b, selected)
@@ -24199,9 +24215,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			if toolDef.Icon != "" {
 				toolName = toolDef.Icon + " " + toolName
 			}
-			customHeader := renderSectionDivider(toolName, width-4)
-			b.WriteString(customHeader)
-			b.WriteString("\n")
+			agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, toolName, width-4) // Patch 38
 
 			labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 
@@ -24245,6 +24259,14 @@ func (h *Home) renderPreviewPane(width, height int) string {
 				}
 			}
 		}
+	}
+
+	// Patch 38 (responsive): collapsed tool section keeps only its divider.
+	if agentHdr != "" && h.previewSectionCollapsed(previewSectionAgent) {
+		b.Reset()
+		b.WriteString(agentSnap)
+		b.WriteString(agentHdr)
+		b.WriteString("\n")
 	}
 
 	// Advertised for every tool, after the tool-specific sections, because the
@@ -24425,12 +24447,13 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// Analytics panel (for Claude/Gemini sessions with analytics enabled)
 	// Skip showing "Loading analytics..." during startup - let the launch animation take focus
 	if showAnalytics && !isStartingUp {
-		analyticsHeader := renderSectionDivider("Analytics", width-4)
-		b.WriteString(analyticsHeader)
-		b.WriteString("\n")
+		// Patch 38 (responsive): collapsible; collapsed shows only the divider.
+		h.writePreviewSectionHeader(&b, previewSectionAnalytics, "Analytics", width-4)
 
-		// Check if we have analytics for this session
-		if h.analyticsSessionID == selected.ID && (h.currentAnalytics != nil || h.currentGeminiAnalytics != nil) {
+		if h.previewSectionCollapsed(previewSectionAnalytics) {
+			// body skipped
+		} else if h.analyticsSessionID == selected.ID && (h.currentAnalytics != nil || h.currentGeminiAnalytics != nil) {
+			// Check if we have analytics for this session
 			// Pass display settings from config
 			if config != nil {
 				h.analyticsPanel.SetDisplaySettings(config.Preview.GetAnalyticsSettings())
@@ -24451,7 +24474,13 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	remainingLines := height - (strings.Count(b.String(), "\n") + 1)
 	if showNotes {
 		notesLines := notesSectionLineBudget(remainingLines, showOutput || isStartingUp, notesOutputSplit)
-		if notesLines > 0 {
+		// Patch 38 (responsive): collapsible. An open editor never collapses
+		// (the user is typing into it).
+		notesEditingHere := h.notesEditing && h.notesEditingSessionID == selected.ID
+		if notesLines > 0 && h.previewSectionCollapsed(previewSectionNotes) && !notesEditingHere {
+			h.writePreviewSectionHeader(&b, previewSectionNotes, "Notes", width-4)
+		} else if notesLines > 0 {
+			h.recordPreviewSection(previewSectionNotes, strings.Count(b.String(), "\n"))
 			b.WriteString(h.renderNotesSection(selected, width, notesLines))
 			b.WriteString("\n")
 		}
@@ -24485,9 +24514,9 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	}
 
 	// Terminal output header
-	termHeader := renderSectionDivider("Output", width-4)
-	b.WriteString(termHeader)
-	b.WriteString("\n")
+	// Patch 38 (responsive): collapsible; collapsed shows only the divider.
+	h.writePreviewSectionHeader(&b, previewSectionOutput, "Output", width-4)
+	outputCollapsed := h.previewSectionCollapsed(previewSectionOutput)
 
 	// Check if this session is launching (newly created), resuming (restarted), or forking
 	launchTime, isLaunching := h.launchingSessions[selected.ID]
@@ -24583,7 +24612,9 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Show worktree setup animation when setup script is running
 	setupTime, isSetupRunning := h.setupRunningSessions[selected.ID]
-	if isSetupRunning {
+	if outputCollapsed {
+		// Patch 38 (responsive): body skipped, the divider above is all that shows.
+	} else if isSetupRunning {
 		b.WriteString("\n")
 		b.WriteString(h.renderSetupRunningState(selected, width, setupTime))
 	} else if showForkingAnimation {
@@ -24822,7 +24853,8 @@ func (h *Home) renderNotesSection(inst *session.Instance, width, maxLines int) s
 	}
 
 	lines := make([]string, 0, maxLines)
-	lines = append(lines, renderSectionDivider("Notes", width-4))
+	// Patch 38 (responsive): fold marker; the caller records the hitbox row.
+	lines = append(lines, renderCollapsibleDivider("Notes", width-4, false))
 	bodyLines := maxLines - 1
 	if bodyLines < 1 {
 		bodyLines = 1

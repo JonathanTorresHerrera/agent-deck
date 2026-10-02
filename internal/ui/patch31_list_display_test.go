@@ -70,7 +70,7 @@ func TestPatch31_InheritedAccountHiddenNamedAlwaysShown(t *testing.T) {
 		status: session.StatusIdle, tool: "claude",
 		account: "", accountDisplay: newAccountPresentation("", true),
 	}
-	if row := p31RenderRow(h, inherited, inhState, h.width); strings.Contains(row, "[account:") {
+	if row := p31RenderRow(h, inherited, inhState, h.width); strings.Contains(row, "@inherited") { // Patch 38: compact row tag
 		t.Fatalf("inherited tag must be hidden by default. Got: %q", row)
 	}
 
@@ -79,12 +79,12 @@ func TestPatch31_InheritedAccountHiddenNamedAlwaysShown(t *testing.T) {
 		status: session.StatusIdle, tool: "claude",
 		account: "claude-2", accountDisplay: newAccountPresentation("claude-2", true),
 	}
-	if row := p31RenderRow(h, named, namedState, h.width); !strings.Contains(row, `[account:"claude-2"]`) {
+	if row := p31RenderRow(h, named, namedState, h.width); !strings.Contains(row, "@claude-2") {
 		t.Fatalf("a named account badge must always show. Got: %q", row)
 	}
 
 	h.showInheritedAccount = true
-	if row := p31RenderRow(h, inherited, inhState, h.width); !strings.Contains(row, "[account:inherited]") {
+	if row := p31RenderRow(h, inherited, inhState, h.width); !strings.Contains(row, "@inherited") {
 		t.Fatalf("show_inherited_account=true must render the inherited tag. Got: %q", row)
 	}
 }

@@ -35,7 +35,15 @@ func (h *Home) renderingArchivedPartition() bool {
 // Predicate rather than slice so the per-render stats loop over every group
 // stays allocation-free; use visibleGroupSessions where a slice is wanted.
 func (h *Home) sessionInRenderedPartition(sess *session.Instance) bool {
-	return sess != nil && sess.IsArchived() == h.renderingArchivedPartition()
+	return sess != nil && h.archivedInRenderedPartition(sess.IsArchived())
+}
+
+// archivedInRenderedPartition is the same rule for a caller that only has the
+// archived flag (the render snapshot, remote rows) rather than an Instance.
+// Patch 38 (responsive): the header counts and filter pills use it, so they
+// follow the partition exactly like the list, group counts and preview do.
+func (h *Home) archivedInRenderedPartition(archived bool) bool {
+	return archived == h.renderingArchivedPartition()
 }
 
 // visibleGroupSessions returns the rows of g that belong to the partition the

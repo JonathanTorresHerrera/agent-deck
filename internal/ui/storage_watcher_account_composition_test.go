@@ -32,7 +32,7 @@ func TestStorageWatcherAccountOneRefreshComposition(t *testing.T) {
 	require.Equal(t, "reviewer", h.getSessionRenderState(loaded).account)
 	var row strings.Builder
 	h.renderSessionItem(&row, session.Item{Type: session.ItemTypeSession, Session: loaded, Level: 1, Path: "work", IsLastInGroup: true}, false, h.getSessionRenderSnapshot(), 240)
-	require.Contains(t, row.String(), `[account:"reviewer"]`)
+	require.Contains(t, row.String(), "@reviewer") // Patch 38: compact row tag
 	require.Contains(t, h.renderSessionInfoCard(loaded, 240, 40), `"reviewer"`)
 	_, _ = h.Update(old)
 	require.Equal(t, "reviewer", h.getSessionRenderState(h.getInstanceByID(inst.ID)).account, "late old load reverted account snapshot")
