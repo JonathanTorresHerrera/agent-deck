@@ -117,7 +117,9 @@ func ParsePromptFromComposerBlock(lines []string) (string, bool) {
 		}
 
 		markerLen := 0
-		for _, marker := range []string{"❯", "›"} {
+		// Claude Code renders its composer as ">" (newer builds) or "❯"; Codex as "›". Inside the divider-framed
+		// composer block ">" is unambiguous, so it is accepted here but not in the divider-less fallback below.
+		for _, marker := range []string{"❯", "›", ">"} {
 			if strings.HasPrefix(trimmed, marker) {
 				markerLen = len(marker)
 				break
