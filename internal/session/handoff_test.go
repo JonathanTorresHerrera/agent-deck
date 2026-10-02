@@ -54,9 +54,16 @@ func TestBuildClaudeToCodexHandoffPrompt_ReadsClaudeTranscript(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeToCodexHandoffPrompt_RejectsDifferentlyEncodedTranscript(t *testing.T) {
+// Under WSL, claude.exe keys a distro project (/home/user/proj) by its host spelling (the wsl.localhost UNC path,
+// encoded --wsl-localhost-<distro>-home-user-proj). That transcript is the exact artifact of the same directory
+// under the same account, so the handoff uses it (Jev rotation, 2026-10-01).
+func TestBuildClaudeToCodexHandoffPrompt_UsesTheHostSpelledTranscriptUnderWSL(t *testing.T) {
 	claudeDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	prev := hostSpellingsEnabled
+	hostSpellingsEnabled = func() bool { return true }
+	t.Cleanup(func() { hostSpellingsEnabled = prev })
 
 	project := "/home/user/proj"
 	sessionID := "eeeeeeee-ffff-0000-1111-222222222222"
@@ -64,18 +71,37 @@ func TestBuildClaudeToCodexHandoffPrompt_RejectsDifferentlyEncodedTranscript(t *
 	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	transcriptPath := filepath.Join(transcriptDir, sessionID+".jsonl")
-	transcript := `{"type":"user","message":{"role":"user","content":"WSL fallback found me"}}`
-	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o644); err != nil {
+	transcript := `{"type":"user","message":{"role":"user","content":"host spelling found me"}}`
+	if err := os.WriteFile(filepath.Join(transcriptDir, sessionID+".jsonl"), []byte(transcript), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	inst := &Instance{
-		Title:           "wsl-handoff",
-		ProjectPath:     project,
-		Tool:            "claude",
-		ClaudeSessionID: sessionID,
+	inst := &Instance{Title: "wsl-handoff", ProjectPath: project, Tool: "claude", ClaudeSessionID: sessionID}
+	prompt, _, err := BuildClaudeToCodexHandoffPrompt(inst, DefaultHandoffMaxChars)
+	if err != nil || !strings.Contains(prompt, "host spelling found me") {
+		t.Fatalf("host-spelled transcript: err=%v, prompt carries the transcript=%v", err, strings.Contains(prompt, "host spelling found me"))
 	}
+}
+
+// Outside WSL no host spelling exists, so a transcript filed under one is a differently encoded directory and is
+// refused rather than borrowed.
+func TestBuildClaudeToCodexHandoffPrompt_RejectsDifferentlyEncodedTranscript(t *testing.T) {
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	prev := hostSpellingsEnabled
+	hostSpellingsEnabled = func() bool { return false }
+	t.Cleanup(func() { hostSpellingsEnabled = prev })
+
+	project := "/home/user/proj"
+	sessionID := "eeeeeeee-ffff-0000-1111-222222222222"
+	transcriptDir := filepath.Join(claudeDir, "projects", "--wsl-localhost-Ubuntu-home-user-proj")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"user","message":{"role":"user","content":"WSL fallback found me"}}`
+	if err := os.WriteFile(filepath.Join(transcriptDir, sessionID+".jsonl"), []byte(transcript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst := &Instance{Title: "wsl-handoff", ProjectPath: project, Tool: "claude", ClaudeSessionID: sessionID}
 	_, _, err := BuildClaudeToCodexHandoffPrompt(inst, DefaultHandoffMaxChars)
 	if err == nil || !strings.Contains(err.Error(), "no exact context artifact") {
 		t.Fatalf("differently encoded transcript error = %v, want exact-path refusal", err)

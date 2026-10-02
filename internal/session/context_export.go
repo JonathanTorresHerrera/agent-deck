@@ -282,7 +282,11 @@ func canonicalClaudeExactTranscriptPath(inst *Instance) (string, error) {
 		}
 		candidates = append(candidates, spelling)
 	}
+	// The exact path is the first spelling whose transcript exists through REAL directories. The account sync
+	// bridges the distro spelling to the host spelling with a junction (projects/-mnt-d-x -> projects/D--x), and a
+	// symlinked component is refused below, so the bridged spelling must not win over the real one it points at.
 	var path string
+	var unsafe error
 	for i, spelling := range candidates {
 		encoded := ConvertToClaudeDirName(spelling)
 		if encoded == "" {
@@ -292,10 +296,19 @@ func canonicalClaudeExactTranscriptPath(inst *Instance) (string, error) {
 		if i == 0 {
 			path = candidate
 		}
-		if _, statErr := os.Lstat(candidate); statErr == nil {
-			path = candidate
-			break
+		if _, statErr := os.Lstat(candidate); statErr != nil {
+			continue
 		}
+		if err := ensureNoSymlinkPath(candidate); err != nil {
+			if unsafe == nil {
+				unsafe = err
+			}
+			continue
+		}
+		return candidate, nil
+	}
+	if unsafe != nil {
+		return "", fmt.Errorf("unsafe exact Claude source path: %w", unsafe)
 	}
 	if err := ensureNoSymlinkPath(path); err != nil {
 		return "", fmt.Errorf("unsafe exact Claude source path: %w", err)
