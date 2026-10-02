@@ -1,10 +1,13 @@
 package session
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/logging"
 )
@@ -97,7 +100,7 @@ func hostPathSpellings(p string) []string {
 	}
 
 	// A path inside the distro itself, reached from Windows over the share.
-	distro := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME"))
+	distro := wslDistroName()
 	if distro == "" {
 		return nil
 	}
@@ -106,4 +109,41 @@ func hostPathSpellings(p string) []string {
 
 func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+var (
+	wslDistroOnce   sync.Once
+	wslDistroCached string
+)
+
+// wslDistroName is WSL_DISTRO_NAME when the environment carries it, else the distro named by the host spelling of
+// "/" (`wslpath -w /` -> \\wsl.localhost\<distro>\). A systemd --user unit (the Jev rotation tick) has no WSL
+// environment, so without the fallback no UNC candidate was ever built and every switch-account of a session whose
+// cwd lives inside the distro failed on a missing source transcript (2026-10-01).
+func wslDistroName() string {
+	if d := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")); d != "" {
+		return d
+	}
+	wslDistroOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "wslpath", "-w", "/").Output()
+		if err != nil {
+			return
+		}
+		wslDistroCached = distroFromHostRoot(string(out))
+	})
+	return wslDistroCached
+}
+
+// distroFromHostRoot parses the distro out of the host spelling of "/": \\wsl.localhost\<distro>\ or \\wsl$\<distro>\.
+func distroFromHostRoot(root string) string {
+	root = strings.TrimSpace(root)
+	for _, prefix := range []string{`\\wsl.localhost\`, `\\wsl$\`} {
+		if rest, ok := strings.CutPrefix(root, prefix); ok {
+			name, _, _ := strings.Cut(rest, `\`)
+			return strings.TrimSpace(name)
+		}
+	}
+	return ""
 }
