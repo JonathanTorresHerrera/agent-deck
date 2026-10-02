@@ -18882,11 +18882,31 @@ func (h *Home) renderFilterBar() string {
 
 	// Join pills with spaces (leading space replaces Padding)
 	pillsRow := " " + strings.Join(pills, " ")
-	hint := h.fitFilterBarHint(cellWidth(pillsRow))
+	// Patch 39 (provider counts): live sessions per provider follow the pills.
+	// They outrank the key hint (still in ?): the hint shortens first (upstream's
+	// fitFilterBarHint drops whole segments), then the provider counts lose their
+	// running figure, then disappear. Pills are never cut.
+	counts := h.providerCounts()
+	var providers, hint string
+	for level := 0; level <= 2; level++ {
+		providers = renderProviderCounts(counts, level)
+		used := cellWidth(pillsRow) + cellWidth(providers)
+		hint = h.fitFilterBarHint(used)
+		if h.width <= 0 || used+cellWidth(hint) <= h.width {
+			break
+		}
+		if used <= h.width {
+			// The counts fit at this level and only the hint (even its "…") does
+			// not: drop the hint, keep the counts.
+			hint = ""
+			break
+		}
+	}
+	filterRow := pillsRow + providers + hint
 
 	return lipgloss.NewStyle().
 		MaxWidth(h.width).
-		Render(pillsRow + hint)
+		Render(filterRow)
 }
 
 func (h *Home) statusFilterLabel() string {
