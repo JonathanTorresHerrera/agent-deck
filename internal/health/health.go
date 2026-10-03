@@ -134,9 +134,50 @@ func remoteWarning(name string, r Remote) string {
 		strconv.QuoteToASCII(name), float64(r.StatusPassMS)/1000, r.TmuxCalls, r.Sessions)
 }
 
+// Patch 40 (fleet-sized health budget): the status pass walks every session,
+// so a fixed 250 ms budget fires constantly on a large deck (445 sessions here)
+// while nothing is wrong. The budget grows by 1 ms per session beyond 100, and
+// passes in the first statusPassWarmup after the sampler starts (the TUI's cold
+// load, which took 1.7 s on 2026-10-02) never count toward a breach.
+const (
+	statusPassBudgetBaseSessions = 100
+	statusPassWarmup             = 90 * time.Second
+)
+
+var statusPassWarmupUntil struct {
+	sync.Mutex
+	t time.Time
+}
+
+// StatusPassBudgetFor is the status-pass budget for a fleet of n sessions.
+func StatusPassBudgetFor(sessions int) time.Duration {
+	if sessions <= statusPassBudgetBaseSessions {
+		return StatusPassBudget
+	}
+	return StatusPassBudget + time.Duration(sessions-statusPassBudgetBaseSessions)*time.Millisecond
+}
+
+// ResetStatusPassWarmup ends the warm-up window. Exposed for tests only (a
+// test that builds a Home starts the sampler, which opens the window).
+func ResetStatusPassWarmup() {
+	statusPassWarmupUntil.Lock()
+	defer statusPassWarmupUntil.Unlock()
+	statusPassWarmupUntil.t = time.Time{}
+}
+
+func inStatusPassWarmup() bool {
+	statusPassWarmupUntil.Lock()
+	defer statusPassWarmupUntil.Unlock()
+	return !statusPassWarmupUntil.t.IsZero() && time.Now().Before(statusPassWarmupUntil.t)
+}
+
 func BudgetWarning(d time.Duration, sessions int, tmuxCalls int64) string {
-	if statusPassSustainedBreach(d) {
-		return "Health: status pass exceeds 250 ms budget"
+	if inStatusPassWarmup() { // Patch 40: cold-load passes are not a health signal
+		return ""
+	}
+	budget := StatusPassBudgetFor(sessions)
+	if statusPassSustainedBreach(d, budget) {
+		return fmt.Sprintf("Health: status pass exceeds %d ms budget", budget.Milliseconds())
 	}
 	if tmuxCalls > int64(2*sessions) {
 		return "Health: tmux calls exceed twice the session count"
@@ -154,9 +195,9 @@ var statusBreach struct {
 // whether the budget warning should be active: three consecutive breaches, or
 // the median of the last five samples, over budget. Any single sample under
 // budget clears it immediately.
-func statusPassSustainedBreach(d time.Duration) bool {
+func statusPassSustainedBreach(d, budget time.Duration) bool {
 	ms := float64(d) / float64(time.Millisecond)
-	budgetMS := float64(StatusPassBudget / time.Millisecond)
+	budgetMS := float64(budget / time.Millisecond)
 	over := ms >= budgetMS
 	statusBreach.Lock()
 	defer statusBreach.Unlock()
@@ -208,6 +249,11 @@ func Start(dir, role, hooksDir, binaryVersion string) func() {
 	observations.Lock()
 	observations.active++
 	observations.Unlock()
+	statusPassWarmupUntil.Lock() // Patch 40: the first sampler start opens the warm-up window
+	if statusPassWarmupUntil.t.IsZero() {
+		statusPassWarmupUntil.t = started.Add(statusPassWarmup)
+	}
+	statusPassWarmupUntil.Unlock()
 	var previousCPU *float64
 	previousTime := started
 	sample := func() {

@@ -19,6 +19,7 @@ func TestRuntimeHealthWarningGolden(t *testing.T) {
 	h.width, h.height = 100, 30
 	h.initialLoading = false
 	h.debugMode = false
+	health.ResetStatusPassWarmup() // Patch 40: NewHome's sampler opens the cold-load window
 
 	// A single spike does not show the warning: it needs a sustained breach.
 	h.queueHealthWarning(905*time.Millisecond, 150, 1)
