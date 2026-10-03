@@ -437,6 +437,8 @@ func (h *HelpOverlay) View() string {
 			title: "OTHER",
 			items: [][2]string{
 				{settingsKey, "Settings"},
+				{h.key(hotkeyFooterMenu, ":"), "All actions: run one, or arrange the footer pages"},
+				{h.key(hotkeyFooterPage, "."), "Footer page 1 / 2 (paged footer)"},
 				{reloadKey, "Reload from disk"},
 				{installUpdateKey, "Install the available update (runs agent-deck update)"},
 				{restartDeckKey, "Restart agent-deck in place (picks up an installed update)"},

@@ -531,6 +531,15 @@ type UISettings struct {
 	// action remains reachable by its key and is fully listed under help (?).
 	Footer string `toml:"footer,omitempty"`
 
+	// Patch 44 (paged footer): the "paged" footer's layout, one ordered list of
+	// action IDs per row kind. "--" splits page 1 (always on the bar) from page 2
+	// (shown with the footer_page key, "."). Written by the TUI's footer menu
+	// (":"), not by the settings panel, so a panel save keeps the disk value.
+	// Empty uses the built-in default order; IDs this build does not know are
+	// skipped, and actions missing from the list go to the end of page 2.
+	FooterSession []string `toml:"footer_session,omitempty"`
+	FooterGroup   []string `toml:"footer_group,omitempty"`
+
 	// NewSessionEnterAdvances controls what Enter does on the free-text
 	// Name/Branch fields of the new-session dialog. As of the UX top-3 pass this
 	// is ON BY DEFAULT (the mechanism shipped opt-in in PR #1295): Enter advances
@@ -816,6 +825,10 @@ const (
 	FooterFull    = "full"
 	FooterCompact = "compact"
 	FooterMinimal = "minimal"
+	// FooterPaged (patch 44) is the fork's two-page, user-ordered bar: every
+	// action keeps a fixed slot (an unavailable one is dimmed, never removed), so
+	// the bar no longer reflows when a session's state changes.
+	FooterPaged = "paged"
 	// DefaultFooter is the historic verbose bar ("full"). Keeping it as the
 	// default preserves today's look; curated/compact/minimal are opt-in via
 	// config.toml [ui] footer.
@@ -836,6 +849,8 @@ func (u UISettings) GetFooter() string {
 		return FooterMinimal
 	case FooterCurated:
 		return FooterCurated
+	case FooterPaged:
+		return FooterPaged
 	}
 	return DefaultFooter
 }

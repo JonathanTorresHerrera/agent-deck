@@ -719,7 +719,11 @@ type Home struct {
 	// One of session.FooterCurated (default), FooterFull, FooterCompact, or
 	// FooterMinimal. Cached so every render of a frame agrees. Additive/opt-in:
 	// it only changes WHAT the footer advertises, never a keybinding.
-	footerMode           string
+	footerMode string
+	// Patch 44 (paged footer): the page the paged footer shows (0 or 1) and
+	// the ":" footer menu's state.
+	footerPage           int
+	footerMenu           footerMenuState
 	healthWarningPending atomic.Pointer[string]
 	healthWarningText    string
 	healthWarningAt      time.Time
@@ -10320,6 +10324,10 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h, nil // consume all other keys
 		}
 
+		if h.footerMenu.open {
+			return h.handleFooterMenuKey(msg)
+		}
+
 		if h.showHealthPanel {
 			switch keyStr := msg.String(); keyStr {
 			case "q", "esc", h.actionKey(hotkeyHealthPanel):
@@ -13291,6 +13299,16 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case FilterKeyError, "shift+7":
 		// Filter to error sessions only.
 		return h, h.changeStatusFilter(session.StatusError)
+
+	case h.actionKey(hotkeyFooterPage):
+		// Patch 44: flip the paged footer between its two pages.
+		h.toggleFooterPage()
+		return h, nil
+
+	case h.actionKey(hotkeyFooterMenu):
+		// Patch 44: every action for the selected row, runnable and arrangeable.
+		h.openFooterMenu()
+		return h, nil
 
 	case h.actionKey(hotkeyHealthPanel):
 		// Full-screen deck diagnostics: phantom/ghost sessions, duplicate
@@ -19185,6 +19203,9 @@ func (h *Home) renderFrame() string {
 	if h.showHealthPanel {
 		return h.healthPanel.View()
 	}
+	if h.footerMenu.open {
+		return h.renderFooterMenu()
+	}
 
 	// Reuse viewBuilder to reduce allocations (reset and pre-allocate)
 	h.viewBuilder.Reset()
@@ -20687,6 +20708,8 @@ func (h *Home) renderHelpBar() string {
 	}
 
 	switch h.footerMode {
+	case session.FooterPaged:
+		return h.renderHelpBarPaged()
 	case session.FooterCurated:
 		return h.renderHelpBarCurated()
 	case session.FooterCompact:

@@ -77,6 +77,11 @@ const (
 	// quick_approve.
 	hotkeyAgentsPanel = "agents_panel"
 	hotkeyHealthPanel = "health_panel"
+	// Patch 44 (paged footer): "." flips the footer between page 1 and page 2;
+	// ":" opens the footer menu, which lists every action for the selected row,
+	// runs one, or rearranges which page each sits on.
+	hotkeyFooterPage = "footer_page"
+	hotkeyFooterMenu = "footer_menu"
 	// Session switcher. While attached it is intercepted in the tmux attach
 	// loop (see internal/tmux/pty.go AttachOptions); on the home screen it is
 	// dispatched like any other hotkey. Must resolve to a "ctrl+<letter>" chord.
@@ -163,6 +168,8 @@ var hotkeyActionOrder = []string{
 	hotkeyDeadLetters,
 	hotkeyAgentsPanel,
 	hotkeyHealthPanel,
+	hotkeyFooterPage,
+	hotkeyFooterMenu,
 	hotkeySwitchSession,
 	hotkeyAltSession,
 	hotkeyMRUBack,
@@ -221,6 +228,8 @@ var defaultHotkeyBindings = map[string]string{
 	hotkeyDeadLetters:      "alt+d",
 	hotkeyAgentsPanel:      "alt+a",
 	hotkeyHealthPanel:      "Z",
+	hotkeyFooterPage:       ".",
+	hotkeyFooterMenu:       ":",
 	hotkeySwitchSession:    "ctrl+s",
 	hotkeyAltSession:       "`",
 	hotkeyMRUBack:          "alt+left",
