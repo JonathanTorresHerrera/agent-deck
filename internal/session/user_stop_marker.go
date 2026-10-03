@@ -48,3 +48,12 @@ func clearUserStopMarker(instanceID string) {
 	}
 	_ = os.Remove(filepath.Join(userStopMarkerDir(), instanceID))
 }
+
+// MarkUserStopIntent records explicit teardown intent BEFORE the process goes
+// away. `session stop --graceful` needs it: the agent exits on its own command
+// first, and a pane that vanishes without the marker looks exactly like a
+// crash to reboot recovery. Kill/KillAndWait write the same marker afterwards;
+// the write is idempotent.
+func (i *Instance) MarkUserStopIntent() {
+	markUserStopped(i.ID)
+}
