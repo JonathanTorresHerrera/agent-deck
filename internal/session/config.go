@@ -451,6 +451,13 @@ func ResolveProfileForStorage(explicit string) (string, error) {
 	}
 
 	fallback := configuredDefaultProfile()
+	// Patch 41: CLAUDE_CONFIG_DIR pointing at a configured ACCOUNT SLOT
+	// ([profiles.<slot>.claude].config_dir, e.g. Jev's claude-2/claude-3
+	// rotation slots) is that slot by design, not a request for an agent-deck
+	// profile. Fall back silently instead of warning on every CLI call.
+	if isConfiguredAccountSlotDir(os.Getenv("CLAUDE_CONFIG_DIR")) {
+		return fallback, nil
+	}
 	known, listErr := ListProfiles()
 	knownDesc := "none yet"
 	if listErr == nil && len(known) > 0 {
