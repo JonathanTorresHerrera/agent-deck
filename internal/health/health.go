@@ -189,6 +189,7 @@ var statusBreach struct {
 	sync.Mutex
 	recent          []float64
 	consecutiveOver int
+	overSince       time.Time // Patch 46: first pass of the current over-budget run
 }
 
 // statusPassSustainedBreach tracks recent status-pass durations and reports
@@ -207,9 +208,20 @@ func statusPassSustainedBreach(d, budget time.Duration) bool {
 	}
 	if !over {
 		statusBreach.consecutiveOver = 0
+		statusBreach.overSince = time.Time{}
 		return false
 	}
 	statusBreach.consecutiveOver++
+	// Patch 46: the breach must also have lasted statusPassSustainFor. A burst
+	// of slow passes (a fleet-wide refresh: 1190 ms and 177 tmux calls for a
+	// few seconds on 2026-10-05) is not something the user can act on.
+	now := statusNow()
+	if statusBreach.overSince.IsZero() {
+		statusBreach.overSince = now
+	}
+	if now.Sub(statusBreach.overSince) < statusPassSustainFor {
+		return false
+	}
 	if statusBreach.consecutiveOver >= statusConsecutiveBreach {
 		return true
 	}
@@ -225,12 +237,34 @@ func statusPassSustainedBreach(d, budget time.Duration) bool {
 	return median >= budgetMS
 }
 
+// Patch 46: how long status passes must stay over budget before the footer
+// warns, and the clock that measures it (both swappable for tests).
+var (
+	statusPassSustainFor = 30 * time.Second
+	statusNow            = time.Now
+)
+
+// SetStatusPassSustainFor changes the sustain window and returns a restore
+// function. Exposed for tests only.
+func SetStatusPassSustainFor(d time.Duration) (restore func()) {
+	statusBreach.Lock()
+	prev := statusPassSustainFor
+	statusPassSustainFor = d
+	statusBreach.Unlock()
+	return func() {
+		statusBreach.Lock()
+		statusPassSustainFor = prev
+		statusBreach.Unlock()
+	}
+}
+
 // ResetStatusPassBreachState clears the sustained-breach tracker. Exposed for tests only.
 func ResetStatusPassBreachState() {
 	statusBreach.Lock()
 	defer statusBreach.Unlock()
 	statusBreach.recent = nil
 	statusBreach.consecutiveOver = 0
+	statusBreach.overSince = time.Time{}
 }
 
 // Start samples immediately and once per minute. The returned idempotent stop

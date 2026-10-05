@@ -23,6 +23,7 @@ func TestPatch40_BudgetScalesWithFleet(t *testing.T) {
 func p40Clear(t *testing.T) {
 	t.Helper()
 	ResetStatusPassBreachState()
+	t.Cleanup(SetStatusPassSustainFor(0)) // patch 46's 30 s window has its own test
 	statusPassWarmupUntil.Lock()
 	statusPassWarmupUntil.t = time.Time{}
 	statusPassWarmupUntil.Unlock()
