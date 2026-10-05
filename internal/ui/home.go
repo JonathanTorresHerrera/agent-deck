@@ -685,6 +685,8 @@ type Home struct {
 	// listDensity "" == comfortable (the historical rendering).
 	listDensity          string
 	showToolLabel        bool            // dim " claude" tool name on each row (default off)
+	showProviderBadge    bool            // Patch 45: provider letter after the status glyph
+	providerFilter       string          // Patch 45: show only this provider's sessions ("" = all); set by clicking a provider count
 	showInheritedAccount bool            // " [account:inherited]" badge (default off; named slots always show)
 	showEmptyGroups      bool            // keep zero-session groups in the list (default off)
 	showAidaSuffix       bool            // Patch 38: keep the " (Aida)" title suffix on rows (default off = stripped)
@@ -3430,6 +3432,11 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	if len(h.hiddenStatuses) > 0 && !viewArchived {
 		h.flatItems = h.applyHiddenStatuses(h.flatItems)
 	}
+	// Patch 45 (provider filter): only the clicked provider's sessions. Applies
+	// in the archived view too and stacks with every status filter.
+	if h.providerFilter != "" {
+		h.flatItems = h.applyProviderFilter(h.flatItems, viewArchived)
+	}
 
 	// Use one remote snapshot for recency fallback and row construction.
 	h.remoteSessionsMu.RLock()
@@ -3450,7 +3457,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				partitioned = append(partitioned, remote)
 			}
 		}
-		plainActiveView := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" && len(h.hiddenStatuses) == 0
+		plainActiveView := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" && len(h.hiddenStatuses) == 0 && h.providerFilter == ""
 		if len(partitioned) == 0 && !plainActiveView {
 			continue
 		}
@@ -3638,7 +3645,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 			// the remote's own group order to the group headers. In the plain
 			// active view, empty remote groups get a header row too, like an
 			// empty local group; any filter or the archived view hides them.
-			showEmptyGroups := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" && len(h.hiddenStatuses) == 0
+			showEmptyGroups := !viewArchived && h.timeFilter == session.TimeFilterAll && h.statusFilter == "" && len(h.hiddenStatuses) == 0 && h.providerFilter == ""
 			rows := buildRemoteFlatItemsWithEmptyGroups(remoteName, sessions, collapsed, h.remoteSessionOrder.forRemote(remoteName), remoteGroupLists[remoteName], showEmptyGroups)
 			for _, row := range rows {
 				// An empty group's header has no session to count; give it
@@ -10446,6 +10453,11 @@ func (h *Home) clearFiltersHiding(inst *session.Instance) string {
 	if !inst.IsArchived() && h.statusHidden(inst.Status) {
 		h.clearHiddenStatuses()
 		names = append(names, "hidden status chips")
+	}
+	// Patch 45: the provider filter hides every other provider's sessions.
+	if h.providerFilter != "" && providerKey(inst.Tool) != h.providerFilter {
+		h.providerFilter = ""
+		names = append(names, "provider filter")
 	}
 	return strings.Join(names, " and ")
 }
@@ -18904,10 +18916,10 @@ func (h *Home) renderFilterBar() string {
 	// They outrank the key hint (still in ?): the hint shortens first (upstream's
 	// fitFilterBarHint drops whole segments), then the provider counts lose their
 	// running figure, then disappear. Pills are never cut.
-	counts := h.providerCounts()
+	counts := h.providerCountsForBar() // Patch 45: keeps a filtered provider with no live session
 	var providers, hint string
 	for level := 0; level <= 2; level++ {
-		providers = renderProviderCounts(counts, level)
+		providers = renderProviderCountsSel(counts, level, h.providerFilter) // Patch 45
 		used := cellWidth(pillsRow) + cellWidth(providers)
 		hint = h.fitFilterBarHint(used)
 		if h.width <= 0 || used+cellWidth(hint) <= h.width {
@@ -18921,6 +18933,8 @@ func (h *Home) renderFilterBar() string {
 		}
 	}
 	filterRow := pillsRow + providers + hint
+	// Patch 45: provider counts are click targets (filter to that provider).
+	h.recordProviderHitboxes(counts, cellWidth(pillsRow), providers)
 
 	return lipgloss.NewStyle().
 		MaxWidth(h.width).
@@ -22287,6 +22301,11 @@ func (h *Home) renderSessionItem(
 			baseIndent = groupIndent + SessionSelectionPrefix.Render(" ▶")
 			selectionPrefix = " "
 		}
+	}
+
+	// Patch 45 (provider badge): one coloured letter after the status glyph.
+	if h.showProviderBadge && (listWidth <= 0 || listWidth >= 40) {
+		status += " " + renderProviderBadge(instTool, selected)
 	}
 
 	tool := toolStyle.Render(" " + instTool)

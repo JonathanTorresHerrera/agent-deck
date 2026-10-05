@@ -57,7 +57,8 @@ const (
 	SettingShowToolLabel
 	SettingShowInheritedAccount
 	SettingShowEmptyGroups
-	SettingShowAidaSuffix // Patch 38 (responsive)
+	SettingShowAidaSuffix    // Patch 38 (responsive)
+	SettingShowProviderBadge // Patch 45
 	SettingPreviewPct
 	SettingPreviewOrientation
 	SettingShowOnlyInstalledTools
@@ -68,7 +69,7 @@ const (
 )
 
 // Total number of navigable settings.
-const settingsCount = 46
+const settingsCount = 47 // Patch 45: +1 (show provider badge)
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -133,6 +134,7 @@ type SettingsPanel struct {
 	showInheritedAccount bool
 	showEmptyGroups      bool
 	showAidaSuffix       bool // Patch 38 (responsive)
+	showProviderBadge    bool // Patch 45
 	previewPct           int  // 10-90, step 5
 	previewOrientation   int  // index into previewOrientationValues
 
@@ -422,6 +424,7 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 	s.showInheritedAccount = config.Display.ShowInheritedAccount
 	s.showEmptyGroups = config.Display.ShowEmptyGroups
 	s.showAidaSuffix = config.Display.ShowAidaSuffix
+	s.showProviderBadge = config.Display.ShowProviderBadge
 	s.previewPct = config.UI.GetPreviewPct()
 	s.previewOrientation = 0
 	for i, val := range previewOrientationValues {
@@ -588,6 +591,7 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	config.Display.ShowInheritedAccount = s.showInheritedAccount
 	config.Display.ShowEmptyGroups = s.showEmptyGroups
 	config.Display.ShowAidaSuffix = s.showAidaSuffix
+	config.Display.ShowProviderBadge = s.showProviderBadge
 	config.UI.PreviewPct = s.previewPct
 	if s.previewOrientation >= 0 && s.previewOrientation < len(previewOrientationValues) {
 		config.UI.PreviewOrientation = previewOrientationValues[s.previewOrientation]
@@ -953,6 +957,10 @@ func (s *SettingsPanel) toggleValue() bool {
 
 	case SettingShowAidaSuffix: // Patch 38 (responsive)
 		s.showAidaSuffix = !s.showAidaSuffix
+		return true
+
+	case SettingShowProviderBadge: // Patch 45
+		s.showProviderBadge = !s.showProviderBadge
 		return true
 
 	case SettingEmbeddedTerminal:
@@ -1387,6 +1395,12 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n")
 
+	line = s.renderCheckbox("Show provider badge", s.showProviderBadge) + " - C/G/X letter after the status icon" // Patch 45
+	if s.cursor == int(SettingShowProviderBadge) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
 	line = s.renderNumber("Preview split:", s.previewPct, "% preview")
 	if s.cursor == int(SettingPreviewPct) {
 		line = highlightStyle.Render(line)
@@ -1539,13 +1553,14 @@ func (s *SettingsPanel) View() string {
 			63, // SettingShowInheritedAccount
 			64, // SettingShowEmptyGroups
 			65, // SettingShowAidaSuffix (Patch 38)
-			66, // SettingPreviewPct
-			67, // SettingPreviewOrientation
-			70, // SettingShowOnlyInstalledTools (TOOL PICKER section)
-			71, // SettingVisibleTools
-			74, // SettingEmbeddedTerminal (INTERFACE section)
-			75, // SettingSidebarDensity
-			80, // SettingPrivacy (PRIVACY section)
+			66, // SettingShowProviderBadge (Patch 45)
+			67, // SettingPreviewPct
+			68, // SettingPreviewOrientation
+			71, // SettingShowOnlyInstalledTools (TOOL PICKER section)
+			72, // SettingVisibleTools
+			75, // SettingEmbeddedTerminal (INTERFACE section)
+			76, // SettingSidebarDensity
+			81, // SettingPrivacy (PRIVACY section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 

@@ -1,11 +1,8 @@
 package ui
 
 import (
-	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
@@ -66,23 +63,9 @@ func (h *Home) providerCounts() []providerCount {
 }
 
 // renderProviderCounts renders the segment at a detail level:
-// 0 = "claude 65 (7▶) · codex 2", 1 = without the running figure, 2 = nothing.
-// Returns "" when there are no live sessions.
+// 0 = "C Claude 65 (7>) . G ChatGPT 2", 1 = without the running figure,
+// 2 = nothing. Returns "" when there are no live sessions. Patch 45 added the
+// badge letters and display names (renderProviderCountsSel).
 func renderProviderCounts(counts []providerCount, level int) string {
-	if level >= 2 || len(counts) == 0 {
-		return ""
-	}
-	nameStyle := lipgloss.NewStyle().Foreground(ColorText)
-	numStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	runStyle := lipgloss.NewStyle().Foreground(ColorGreen)
-	sepStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
-	parts := make([]string, 0, len(counts))
-	for _, pc := range counts {
-		p := nameStyle.Render(pc.tool) + " " + numStyle.Render(fmt.Sprintf("%d", pc.live))
-		if level == 0 && pc.running > 0 {
-			p += " " + runStyle.Render(fmt.Sprintf("(%d▶)", pc.running))
-		}
-		parts = append(parts, p)
-	}
-	return "   " + strings.Join(parts, sepStyle.Render(" · "))
+	return renderProviderCountsSel(counts, level, "")
 }

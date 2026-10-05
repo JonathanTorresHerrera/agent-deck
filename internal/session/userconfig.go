@@ -3869,6 +3869,11 @@ type DisplaySettings struct {
 	// rendered archive partition) visible in the list. Default: false (hidden).
 	ShowEmptyGroups bool `toml:"show_empty_groups,omitempty"`
 
+	// Patch 45 (provider badge): a one-letter, provider-coloured badge right
+	// after each row's status glyph (C Claude, G ChatGPT, X Grok, ...). The
+	// provider counts on the filter bar double as its legend. Default: false.
+	ShowProviderBadge bool `toml:"show_provider_badge,omitempty"`
+
 	// ShowAidaSuffix shows the literal " (Aida)" suffix that sessions launched
 	// by Aida via agent-deck-mcp carry on their title. Default: false (hidden
 	// in the SESSIONS list rows only; the stored title is never modified).

@@ -53,16 +53,16 @@ func TestPatch39_ProviderCountsLiveActivePartition(t *testing.T) {
 func TestPatch39_RenderLevels(t *testing.T) {
 	counts := []providerCount{{tool: "claude", live: 65, running: 7}, {tool: "codex", live: 2}}
 	full := stripAnsi(renderProviderCounts(counts, 0))
-	for _, want := range []string{"claude 65", "(7▶)", "codex 2"} {
+	for _, want := range []string{"C Claude 65", "(7▶)", "G ChatGPT 2"} {
 		if !strings.Contains(full, want) {
 			t.Fatalf("level 0 %q missing %q", full, want)
 		}
 	}
-	if strings.Contains(full, "codex 2 (") {
+	if strings.Contains(full, "ChatGPT 2 (") {
 		t.Fatalf("a provider with nothing running must not show a running figure: %q", full)
 	}
 	short := stripAnsi(renderProviderCounts(counts, 1))
-	if strings.Contains(short, "▶") || !strings.Contains(short, "claude 65") {
+	if strings.Contains(short, "▶") || !strings.Contains(short, "Claude 65") {
 		t.Fatalf("level 1 must drop only the running figure: %q", short)
 	}
 	if renderProviderCounts(counts, 2) != "" || renderProviderCounts(nil, 0) != "" {
@@ -79,7 +79,7 @@ func TestPatch39_FilterBarShowsProvidersAndFits(t *testing.T) {
 		if lipgloss.Width(bar) > w {
 			t.Fatalf("width %d: filter bar is %d wide", w, lipgloss.Width(bar))
 		}
-		if w >= 150 && !strings.Contains(plain, "claude 3 (1▶) · codex 2 · grok 1 · shell 1") {
+		if w >= 150 && !strings.Contains(plain, "C Claude 3 (1▶) · G ChatGPT 2 · X Grok 1 · $ shell 1") {
 			t.Fatalf("width %d: provider counts missing: %q", w, plain)
 		}
 	}

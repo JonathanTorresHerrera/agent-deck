@@ -29,8 +29,10 @@ const (
 type statusChipHitbox struct {
 	status session.Status // which status it toggles; ignored when all is set
 	all    bool           // the "All" chip: reset every toggle and filter
-	x0, x1 int
-	y      int
+	// provider (patch 45) marks a provider-count target: filter to it.
+	provider string
+	x0, x1   int
+	y        int
 }
 
 // statusHidden reports whether status was toggled off via its chip.
@@ -72,6 +74,7 @@ func (h *Home) resetStatusChips() {
 	selectedBefore := h.captureSelectedItemIdentity()
 	h.clearHiddenStatuses()
 	h.statusFilter = ""
+	h.providerFilter = "" // Patch 45: All clears the provider filter too
 	h.rebuildFlatItemsPreservingSelection(selectedBefore)
 }
 
@@ -119,7 +122,9 @@ func (h *Home) handleStatusChipClick(msg tea.MouseMsg) bool {
 		if msg.Y != c.y || msg.X < c.x0 || msg.X >= c.x1 {
 			continue
 		}
-		if c.all {
+		if c.provider != "" {
+			h.toggleProviderFilter(c.provider)
+		} else if c.all {
 			h.resetStatusChips()
 		} else {
 			h.toggleHiddenStatus(c.status)
