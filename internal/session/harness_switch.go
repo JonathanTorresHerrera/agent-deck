@@ -344,7 +344,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 
 	if wasRunning && nativeSwitchRunning(inst) {
 		if err := nativeSwitchStop(inst); err != nil {
-			return switchFailedNative(journalPath, j, fmt.Errorf("stop source before install: %w", err))
+			return switchFailedOnStop(journalPath, j, inst, wasRunning, fmt.Errorf("stop source before install: %w", err))
 		}
 	}
 	// KillAndWait flushes the source and confirms the old pane is gone. The
@@ -512,7 +512,7 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	}
 	if wasRunning && nativeSwitchRunning(inst) {
 		if err := nativeSwitchStop(inst); err != nil {
-			return switchFailedNative(journalPath, j, err)
+			return switchFailedOnStop(journalPath, j, inst, wasRunning, err)
 		}
 	}
 	// The first staged copy is provisional. Re-export after the synchronous stop
@@ -649,8 +649,8 @@ func executeClaudeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	}
 	previousDetectedAt := inst.CodexDetectedAt
 	if wasRunning && inst.Exists() {
-		if err := inst.KillAndWait(); err != nil {
-			return nil, fmt.Errorf("stop source before Codex handoff: %w", err)
+		if err := nativeSwitchStop(inst); err != nil {
+			return switchFailedOnStop(journalPath, j, inst, wasRunning, fmt.Errorf("stop source before Codex handoff: %w", err))
 		}
 	}
 	if wasRunning {
@@ -740,7 +740,7 @@ func executeClaudeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 var (
 	nativeSwitchStart         = func(inst *Instance) error { return inst.Start() }
 	nativeSwitchRunning       = func(inst *Instance) bool { return inst.Exists() }
-	nativeSwitchStop          = func(inst *Instance) error { return inst.KillAndWait() }
+	nativeSwitchStop          = gracefulSwitchStop
 	harnessSwitchJournalWrite = writeSwitchJournal
 )
 
@@ -875,6 +875,20 @@ func switchFailedNative(path string, j *switchJournal, err error) (*HarnessSwitc
 	j.State, j.Failure, j.UpdatedAt = switchFailed, err.Error(), time.Now()
 	_ = writeSwitchJournal(path, j)
 	return nil, err
+}
+
+func switchFailedOnStop(path string, j *switchJournal, inst *Instance, wasRunning bool, cause error) (*HarnessSwitchResult, error) {
+	var stopErr *switchStopError
+	if errors.As(cause, &stopErr) && stopErr.Terminated && stopErr.TeardownConfirmed {
+		return switchFailedAfterStop(path, j, inst, wasRunning, cause)
+	}
+	// The source may still be alive or teardown may be uncertain. Never call
+	// Start on that same instance; persist a failed journal for explicit retry.
+	j.State, j.Failure, j.UpdatedAt = switchFailed, cause.Error(), time.Now()
+	if err := writeSwitchJournal(path, j); err != nil {
+		cause = fmt.Errorf("%w; failed to persist switch failure: %v", cause, err)
+	}
+	return nil, cause
 }
 
 func switchFailedAfterStop(path string, j *switchJournal, inst *Instance, wasRunning bool, cause error) (*HarnessSwitchResult, error) {

@@ -11,6 +11,12 @@ import (
 // after it (")…", ") …", ") ·…").
 var codexStatusLineRe = regexp.MustCompile(`^(?:[•◦]\s+)?\p{Lu}.*\((?:\d+[hms]\s*)+[•·]\s*(?:esc|ctrl ?\+ ?c) to interrupt(?:\)(?: · .*| ?·?…)?|…)$`)
 
+// CodexTurnRunning uses the same busy gate as the Codex prompt detector.
+func CodexTurnRunning(content string) bool {
+	return codexLiveStatusLine(content) ||
+		hasCodexInterruptBusyProvenance(content, codexInterruptPhrases...)
+}
+
 // codexLiveStatusLine reports whether a Codex frame shows the live status
 // line in its live slot immediately before the "› " composer, with only
 // blank lines and status details between the two.

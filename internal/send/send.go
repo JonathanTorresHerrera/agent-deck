@@ -273,7 +273,8 @@ func IsComposerDividerLine(line string) bool {
 }
 
 // ParsePromptFromComposerBlock parses the prompt text from a composer block
-// (the lines between two divider lines). It looks for a prompt marker (❯ or ›)
+// (the lines between two divider lines). It looks for a prompt marker (❯, ›,
+// or the ASCII > used by Windows-native Claude through WSL)
 // and collects any wrapped continuation lines.
 func ParsePromptFromComposerBlock(lines []string) (string, bool) {
 	for i := 0; i < len(lines); i++ {
@@ -331,7 +332,7 @@ func CurrentComposerPrompt(content string) (string, bool) {
 	// divider lines nearest the bottom of the pane.
 	lastDivider := -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if IsComposerDividerLine(lines[i]) {
+		if IsComposerBorderLine(lines[i]) {
 			lastDivider = i
 			break
 		}
@@ -339,7 +340,7 @@ func CurrentComposerPrompt(content string) (string, bool) {
 	if lastDivider > 0 {
 		prevDivider := -1
 		for i := lastDivider - 1; i >= 0; i-- {
-			if IsComposerDividerLine(lines[i]) {
+			if IsComposerBorderLine(lines[i]) {
 				prevDivider = i
 				break
 			}
