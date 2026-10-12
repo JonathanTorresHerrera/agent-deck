@@ -28,6 +28,26 @@ func TestClaudeComposerReady_EmptyComposerIsReady(t *testing.T) {
 	}
 }
 
+func TestClaudeComposerReady_WindowsNativeASCIIPrompt(t *testing.T) {
+	border := strings.Repeat("─", 60)
+	frame := func(body string) string {
+		return strings.Join([]string{
+			"● marker saved.",
+			"✻ Sautéed for 5s · done 11:27 AM",
+			border + " WO-DECK-SEAT-SWITCH-01 native graceful demo ─",
+			">\u00a0" + body,
+			border,
+			"  Opus 5.5 │ deck-native-switch-demo.Lenxdo █░░░░░░░░░ 11%",
+		}, "\n")
+	}
+	if r := ClaudeComposerReady(frame("")); !r.Ready {
+		t.Fatalf("empty ASCII composer must be ready, got %+v", r)
+	}
+	if r := ClaudeComposerReady(frame("operator draft")); r.Ready || r.Code != ComposerCodeDraft {
+		t.Fatalf("ASCII composer with operator draft must refuse, got %+v", r)
+	}
+}
+
 func TestClaudeComposerReady_GhostSuggestionCountsAsEmpty(t *testing.T) {
 	// Live capture, lab/evidence/exp11-ghost-live.ansi.
 	r := ClaudeComposerReady(readyPane([]string{"⏺ calc.py defines add(a, b)."}, "\x1b[2madd a subtract function\x1b[0m"))

@@ -94,7 +94,7 @@ func (c *TranscriptChoice) alreadyInstalled() int {
 // claudeProjectKeyCandidates lists the encoded project keys Claude Code may
 // use for workingDir, typed form first. See claudeProjectKeyCandidatesWith.
 func claudeProjectKeyCandidates(workingDir string) []string {
-	return claudeProjectKeyCandidatesWith(workingDir, runtime.GOOS, filepath.EvalSymlinks)
+	return claudeProjectKeyCandidatesForHost(workingDir, runtime.GOOS, os.Getenv("WSL_DISTRO_NAME"), filepath.EvalSymlinks)
 }
 
 // claudeProjectKeyCandidatesWith is the testable form: goos selects the
@@ -102,11 +102,22 @@ func claudeProjectKeyCandidates(workingDir string) []string {
 // The order is stable (typed, /private alias, realpath) and duplicates are
 // removed, so the first key is always the one the session record names.
 func claudeProjectKeyCandidatesWith(workingDir, goos string, resolve func(string) (string, error)) []string {
+	return claudeProjectKeyCandidatesForHost(workingDir, goos, "", resolve)
+}
+
+// A Windows-native Claude started from WSL sees a UNC cwd and keys its
+// transcript under that spelling. Derive it only from this WSL distro and the
+// exact working directory; no project-wide mtime search is permitted.
+func claudeProjectKeyCandidatesForHost(workingDir, goos, wslDistro string, resolve func(string) (string, error)) []string {
 	workingDir = strings.TrimSpace(workingDir)
 	if workingDir == "" {
 		return nil
 	}
 	paths := []string{filepath.Clean(workingDir)}
+	if goos == "linux" && strings.HasPrefix(paths[0], "/") && validWSLDistroName(wslDistro) {
+		windowsPath := strings.ReplaceAll(paths[0], "/", `\`)
+		paths = append(paths, `\\wsl.localhost\`+wslDistro+windowsPath)
+	}
 	if goos == "darwin" {
 		// macOS mounts /tmp, /var and /etc as symlinks into /private; a shell
 		// started in /tmp/x reports either spelling depending on how it got
@@ -135,6 +146,18 @@ func claudeProjectKeyCandidatesWith(workingDir, goos string, resolve func(string
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+func validWSLDistroName(name string) bool {
+	if name == "" || len(name) > 100 {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // claudeTranscriptCopies finds every regular-file copy of sessionID's

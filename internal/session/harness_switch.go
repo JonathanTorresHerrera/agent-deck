@@ -711,7 +711,7 @@ func executeClaudeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	}
 	previousDetectedAt := inst.CodexDetectedAt
 	if wasRunning && inst.Exists() {
-		if err := inst.KillAndWait(); err != nil {
+		if err := nativeSwitchStop(inst); err != nil {
 			return nil, fmt.Errorf("stop source before Codex handoff: %w", err)
 		}
 	}
@@ -802,7 +802,7 @@ func executeClaudeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 var (
 	nativeSwitchStart         = func(inst *Instance) error { return inst.Start() }
 	nativeSwitchRunning       = func(inst *Instance) bool { return inst.Exists() }
-	nativeSwitchStop          = func(inst *Instance) error { return inst.KillAndWait() }
+	nativeSwitchStop          = gracefulSwitchStop
 	harnessSwitchJournalWrite = writeSwitchJournal
 )
 

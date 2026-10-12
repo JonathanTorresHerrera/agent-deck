@@ -19,6 +19,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestClaudeProjectKeyCandidatesWSLWindowsNative(t *testing.T) {
+	keys := claudeProjectKeyCandidatesForHost("/tmp/demo", "linux", "Ubuntu", nil)
+	require.Equal(t, []string{"-tmp-demo", "--wsl-localhost-Ubuntu-tmp-demo"}, keys)
+	keys = claudeProjectKeyCandidatesForHost("/tmp/demo", "linux", "../other", nil)
+	require.Equal(t, []string{"-tmp-demo"}, keys, "unsafe distro names must not become project keys")
+}
+
 // transcriptBody renders n timestamped JSONL events whose newest event is
 // `newest`. Every event carries a distinct body so files of different length
 // never share a byte prefix.
