@@ -13,8 +13,9 @@ func (s *Session) TypeCommand(command string) error {
 }
 
 // TypeCommandChecked gives the caller a final pane check after the command is
-// typed but before Enter can submit it.
-func (s *Session) TypeCommandChecked(command string, beforeEnter func(string) error) error {
+// typed but before Enter can submit it. On a refused check, clear the command
+// only when a fresh capture still shows exactly the injected draft.
+func (s *Session) TypeCommandChecked(command string, beforeEnter func(string) error, matchesInjected ...func(string) bool) error {
 	if command == "" || strings.ContainsAny(command, "\r\n") {
 		return errors.New("TypeCommand needs a single non-empty line")
 	}
@@ -27,13 +28,24 @@ func (s *Session) TypeCommandChecked(command string, beforeEnter func(string) er
 	if beforeEnter != nil {
 		raw, err := s.CapturePaneFresh()
 		if err != nil {
+			s.clearTypedCommandIfExact(matchesInjected)
 			return err
 		}
 		if err := beforeEnter(raw); err != nil {
+			s.clearTypedCommandIfExact(matchesInjected)
 			return err
 		}
 	}
 	return s.sendEnterRawToTarget(s.Name)
+}
+
+func (s *Session) clearTypedCommandIfExact(matchesInjected []func(string) bool) {
+	if len(matchesInjected) == 0 || matchesInjected[0] == nil {
+		return
+	}
+	if current, err := s.CapturePaneFresh(); err == nil && matchesInjected[0](current) {
+		_ = s.SendCtrlU()
+	}
 }
 
 // ForgetCachedExistence makes a deliberate agent exit visible to teardown.

@@ -23,8 +23,22 @@ const (
 type switchExitPane interface {
 	CapturePaneFresh() (string, error)
 	PanePID() (int, error)
-	TypeCommandChecked(string, func(string) error) error
+	TypeCommandChecked(string, func(string) error, ...func(string) bool) error
 	ForgetCachedExistence()
+}
+
+type switchStopError struct {
+	Cause             error
+	ExitSubmitted     bool
+	Terminated        bool
+	TeardownConfirmed bool
+}
+
+func (e *switchStopError) Error() string { return e.Cause.Error() }
+func (e *switchStopError) Unwrap() error { return e.Cause }
+
+func switchStopFailure(err error, submitted, terminated bool) error {
+	return &switchStopError{Cause: err, ExitSubmitted: submitted, Terminated: terminated}
 }
 
 var switchExitNow = time.Now
@@ -36,17 +50,17 @@ var switchExitAlive = func(pid int) bool {
 
 func gracefulSwitchStop(inst *Instance) error {
 	if inst == nil {
-		return errors.New("switch source is nil")
+		return switchStopFailure(errors.New("switch source is nil"), false, false)
 	}
 	if !IsClaudeCompatible(inst.Tool) && !IsCodexCompatible(inst.Tool) {
-		return fmt.Errorf("graceful switch is unavailable for %q", inst.Tool)
+		return switchStopFailure(fmt.Errorf("graceful switch is unavailable for %q", inst.Tool), false, false)
 	}
 	if inst.exitToShellEnabled() && !inst.IsSandboxed() {
-		return errors.New("graceful switch requires exit_to_shell=false for this session; source left running")
+		return switchStopFailure(errors.New("graceful switch requires exit_to_shell=false for this session; source left running"), false, false)
 	}
 	pane := inst.GetTmuxSession()
 	if pane == nil {
-		return errors.New("switch source has no tmux pane")
+		return switchStopFailure(errors.New("switch source has no tmux pane"), false, false)
 	}
 	tool := "codex"
 	if IsClaudeCompatible(inst.Tool) {
@@ -60,29 +74,32 @@ func gracefulSwitchStop(inst *Instance) error {
 	}); err != nil {
 		return err
 	}
-	return inst.KillAndWait()
+	if err := inst.KillAndWait(); err != nil {
+		return switchStopFailure(fmt.Errorf("teardown after source exit: %w", err), true, true)
+	}
+	return nil
 }
 
 func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) error {
 	pid, err := pane.PanePID()
 	if err != nil {
-		return fmt.Errorf("cannot identify switch source process: %w", err)
+		return switchStopFailure(fmt.Errorf("cannot identify switch source process: %w", err), false, false)
 	}
 	if pid <= 0 {
-		return errors.New("cannot identify switch source process: invalid pane PID")
+		return switchStopFailure(errors.New("cannot identify switch source process: invalid pane PID"), false, false)
 	}
 	deadline := switchExitNow().Add(switchIdleWait)
 	for {
 		raw, captureErr := pane.CapturePaneFresh()
 		if captureErr != nil {
-			return fmt.Errorf("cannot read switch source composer: %w", captureErr)
+			return switchStopFailure(fmt.Errorf("cannot read switch source composer: %w", captureErr), false, false)
 		}
 		ready, reason := switchComposerReady(raw, tool)
 		if ready {
 			break
 		}
 		if !switchExitNow().Before(deadline) {
-			return fmt.Errorf("switch source did not become idle within %s (%s)", switchIdleWait, reason)
+			return switchStopFailure(fmt.Errorf("switch source did not become idle within %s (%s)", switchIdleWait, reason), false, false)
 		}
 		switchExitSleep(switchPoll)
 	}
@@ -101,18 +118,33 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 			}
 		}
 		return nil
-	}); err != nil {
-		return fmt.Errorf("send agent exit command: %w", err)
+	}, func(raw string) bool { return switchComposerDraft(raw, tool) == "/exit" }); err != nil {
+		return switchStopFailure(fmt.Errorf("send agent exit command: %w", err), false, false)
 	}
 	deadline = switchExitNow().Add(switchExitWait)
 	for switchExitAlive(pid) {
 		if !switchExitNow().Before(deadline) {
-			return fmt.Errorf("switch source did not exit within %s after /exit", switchExitWait)
+			return switchStopFailure(fmt.Errorf("switch source did not exit within %s after /exit", switchExitWait), true, false)
 		}
 		switchExitSleep(switchPoll)
 	}
 	pane.ForgetCachedExistence()
 	return nil
+}
+
+func switchComposerDraft(raw, tool string) string {
+	if tool == "claude" {
+		draft, visible := send.ComposerDraft(raw, tmux.StripANSI)
+		if visible {
+			return draft
+		}
+	} else if tool == "codex" {
+		draft, visible := send.CodexComposerDraft(raw, tmux.StripANSI)
+		if visible {
+			return draft
+		}
+	}
+	return ""
 }
 
 func switchComposerReady(raw, tool string) (bool, string) {
