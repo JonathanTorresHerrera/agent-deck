@@ -3835,6 +3835,16 @@ func collectProcessTreePIDsViaPgrep(rootPID int) ([]int, error) {
 }
 
 func isLikelyCodexProcessPID(pid int) (bool, error) {
+	// Patch 53: read the command line from /proc instead of forking one
+	// `ps -p` per process. The probe runs with the instance lock held, and at
+	// ~20 ms a fork a 31-process pane tree cost ~650 ms of every status pass
+	// it landed in. /proc/<pid>/cmdline is NUL-separated argv, the same text
+	// `ps -o args=` prints. ps stays the fallback where /proc is unavailable.
+	if raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline"); err == nil {
+		return strings.Contains(strings.ToLower(strings.ReplaceAll(string(raw), "\x00", " ")), "codex"), nil
+	} else if errors.Is(err, os.ErrNotExist) && procFSAvailable() {
+		return false, fmt.Errorf("codex process probe: inspect pid %d: %w", pid, err)
+	}
 	// #nosec G204 -- "ps" is a fixed binary; only arg is strconv.Itoa(int).
 	argsOut, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
 	if err != nil {
@@ -13186,4 +13196,11 @@ func wrapIgnoreSuspend(cmd string) string {
 	// Example: it's -> it'"'"'s -> bash sees: it's.
 	escaped := strings.ReplaceAll(cmd, `'`, `'"'"'`)
 	return "bash -c 'stty susp undef; " + escaped + "'"
+}
+
+// procFSAvailable reports whether /proc exposes this process (Linux), so a
+// missing /proc/<pid> means the process is gone rather than no procfs.
+func procFSAvailable() bool {
+	_, err := os.Stat("/proc/self/cmdline")
+	return err == nil
 }
