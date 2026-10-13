@@ -6480,6 +6480,7 @@ func (h *Home) backgroundStatusUpdate() {
 	h.instancesMu.RUnlock()
 
 	tmuxBefore := tmux.SubprocessStarts()
+	prof := newPassProfile(totalStart, tmuxBefore) // Patch 50
 	defer func() {
 		elapsed := time.Since(totalStart)
 		calls := tmux.SubprocessStarts() - tmuxBefore
@@ -6490,6 +6491,7 @@ func (h *Home) backgroundStatusUpdate() {
 		// health/doctor sample even though status/list already agree.
 		visibleCount := len(session.VisibleInstances(instances))
 		health.RecordStatusPass(elapsed, visibleCount, calls)
+		prof.finish(h.profile, elapsed, visibleCount, calls) // Patch 50
 		if health.Enabled() {
 			h.queueHealthWarning(elapsed, visibleCount, calls)
 		}
@@ -6501,6 +6503,7 @@ func (h *Home) backgroundStatusUpdate() {
 	// DB-only and must not freeze just because tmux is down or the instance
 	// list is briefly empty.
 	h.reconcileClaims(instances)
+	prof.mark("claims")
 
 	// Fast-fail: skip entire status loop when tmux server is dead.
 	// Without this, every subprocess call takes ~3s to fail, causing 30-50s UI freezes.
@@ -6519,6 +6522,7 @@ func (h *Home) backgroundStatusUpdate() {
 	tmux.RefreshExistingSessions()
 	tmux.RefreshPaneInfoCache()
 	refreshDur := time.Since(refreshStart)
+	prof.mark("tmux_refresh")
 	if refreshDur > 100*time.Millisecond {
 		perfLog.Warn("slow_refresh", slog.Duration("duration", refreshDur))
 	}
@@ -6659,6 +6663,8 @@ func (h *Home) backgroundStatusUpdate() {
 
 	// Update the selected sessions in parallel. With PipeManager, skip sessions
 	// idle for >5s (no %output events = no status change).
+	prof.mark("prep")
+	prof.Forced = len(forced)
 	statusStart := time.Now()
 	var statusChanged atomic.Bool
 	var slowMu sync.Mutex
@@ -6684,6 +6690,7 @@ func (h *Home) backgroundStatusUpdate() {
 		return !lastOut.IsZero() && time.Since(lastOut) > 5*time.Second
 	}
 	poll := func(inst *session.Instance) {
+		prof.Polled++
 		h.sweepEvidence[inst.ID] = evidence[inst.ID]
 		g.Go(func() error {
 			oldStatus := inst.GetStatusThreadSafe()
@@ -6764,6 +6771,10 @@ func (h *Home) backgroundStatusUpdate() {
 	_ = g.Wait()                                    // Errors are logged within each goroutine
 
 	statusDur := time.Since(statusStart)
+	prof.mark("status_loop")
+	slowMu.Lock()
+	prof.Slowest = append([]string(nil), slowSessions...)
+	slowMu.Unlock()
 	tracker.tickEnd(statusStart, time.Now())
 	if skipped > 0 {
 		perfLog.Debug(
@@ -6830,6 +6841,7 @@ func (h *Home) backgroundStatusUpdate() {
 		h.publishWebSessionStates(instances)
 	}
 	h.refreshSessionRenderSnapshot(instances)
+	prof.mark("shared_read+snapshot")
 
 	// SQLite writes: heartbeat, status writes (enables multi-instance coordination)
 	if db := statedb.GetGlobal(); db != nil {
@@ -6912,8 +6924,10 @@ func (h *Home) backgroundStatusUpdate() {
 
 	// Always sync notification bar - must check for signal file (Ctrl+b N acknowledgments)
 	// even when no status changes occurred
+	prof.mark("db_writes")
 	notifStart := time.Now()
 	h.syncNotificationsBackground()
+	prof.mark("notifications")
 
 	totalDur := time.Since(totalStart)
 	notifDur := time.Since(notifStart)
