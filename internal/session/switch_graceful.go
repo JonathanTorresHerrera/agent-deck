@@ -24,6 +24,7 @@ type switchExitPane interface {
 	CapturePaneFresh() (string, error)
 	PanePID() (int, error)
 	TypeCommandChecked(string, func(string) error, ...func(string) bool) error
+	SendClaudeExitKeys() error
 	ForgetCachedExistence()
 }
 
@@ -106,16 +107,24 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 	if beforeExit != nil {
 		beforeExit()
 	}
-	if err := pane.TypeCommandChecked("/exit", func(raw string) error {
-		if tool == "claude" {
-			if send.ClaudeTurnRunning(raw) || !send.HasUnsentComposerPrompt(tmux.StripANSI(raw), "/exit") {
-				return errors.New("source composer changed before /exit could be submitted")
-			}
-		} else {
-			draft, visible := send.CodexComposerDraft(raw, tmux.StripANSI)
-			if !visible || draft != "/exit" || tmux.CodexTurnRunning(tmux.StripANSI(raw)) {
-				return errors.New("source composer changed before /exit could be submitted")
-			}
+	if tool == "claude" {
+		// Claude's app:exit binding is Ctrl+D twice. This also works when a
+		// usage limit prevents /exit from leaving the running TUI. Confirm
+		// the composer is still empty immediately before sending the keys.
+		raw, captureErr := pane.CapturePaneFresh()
+		if captureErr != nil {
+			return switchStopFailure(fmt.Errorf("cannot recheck switch source composer: %w", captureErr), false, false)
+		}
+		if ready, reason := switchComposerReady(raw, tool); !ready {
+			return switchStopFailure(fmt.Errorf("source composer changed before exit keys (%s)", reason), false, false)
+		}
+		if err := pane.SendClaudeExitKeys(); err != nil {
+			return switchStopFailure(fmt.Errorf("send agent exit keys: %w", err), false, false)
+		}
+	} else if err := pane.TypeCommandChecked("/exit", func(raw string) error {
+		draft, visible := send.CodexComposerDraft(raw, tmux.StripANSI)
+		if !visible || draft != "/exit" || tmux.CodexTurnRunning(tmux.StripANSI(raw)) {
+			return errors.New("source composer changed before /exit could be submitted")
 		}
 		return nil
 	}, func(raw string) bool { return switchComposerDraft(raw, tool) == "/exit" }); err != nil {
@@ -124,7 +133,7 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 	deadline = switchExitNow().Add(switchExitWait)
 	for switchExitAlive(pid) {
 		if !switchExitNow().Before(deadline) {
-			return switchStopFailure(fmt.Errorf("switch source did not exit within %s after /exit", switchExitWait), true, false)
+			return switchStopFailure(fmt.Errorf("switch source did not exit within %s after exit request", switchExitWait), true, false)
 		}
 		switchExitSleep(switchPoll)
 	}

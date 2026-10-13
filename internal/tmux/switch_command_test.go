@@ -39,6 +39,32 @@ func TestSwitchTypeCommandExitsAndTeardownSucceeds(t *testing.T) {
 	}
 }
 
+func TestSwitchClaudeExitKeysLeavePane(t *testing.T) {
+	skipIfNoTmuxBinary(t)
+	s := NewSession("agent-deck-switch-ctrl-d", t.TempDir())
+	if err := s.runBoundedRun("new-session", "-d", "-s", s.Name, `cat >/dev/null`); err != nil {
+		t.Skipf("tmux unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Kill() })
+	pid, err := s.PanePID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendClaudeExitKeys(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pane process %d did not receive exit keys", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestSwitchTypeCommandRejectsMultiline(t *testing.T) {
 	s := NewSession("agent-deck-switch-command", t.TempDir())
 	for _, command := range []string{"", "/exit\n", "a\rb"} {

@@ -12,6 +12,7 @@ type scriptedSwitchPane struct {
 	frames     []string
 	reads      int
 	typed      []string
+	exitKeys   int
 	forgot     bool
 	captureErr error
 }
@@ -28,6 +29,10 @@ func (p *scriptedSwitchPane) CapturePaneFresh() (string, error) {
 	return p.frames[i], nil
 }
 func (p *scriptedSwitchPane) PanePID() (int, error) { return 42, nil }
+func (p *scriptedSwitchPane) SendClaudeExitKeys() error {
+	p.exitKeys++
+	return nil
+}
 func (p *scriptedSwitchPane) TypeCommandChecked(s string, check func(string) error, _ ...func(string) bool) error {
 	if err := check(claudeSwitchFrame(s)); err != nil {
 		return err
@@ -54,8 +59,23 @@ func TestGracefulSwitchExitWaitsForIdleAndAgentExit(t *testing.T) {
 	if err := gracefulSwitchExit(pane, "claude", nil); err != nil {
 		t.Fatal(err)
 	}
-	if pane.reads != 2 || len(pane.typed) != 1 || pane.typed[0] != "/exit" || !pane.forgot {
+	if pane.reads != 3 || pane.exitKeys != 1 || len(pane.typed) != 0 || !pane.forgot {
 		t.Fatalf("wrong switch exit sequence: %+v", pane)
+	}
+}
+
+func TestGracefulSwitchExitRechecksClaudeComposerBeforeExitKeys(t *testing.T) {
+	oldNow, oldSleep := switchExitNow, switchExitSleep
+	defer func() { switchExitNow, switchExitSleep = oldNow, oldSleep }()
+	now := time.Unix(100, 0)
+	switchExitNow = func() time.Time { return now }
+	switchExitSleep = func(d time.Duration) { now = now.Add(d) }
+	pane := &scriptedSwitchPane{frames: []string{claudeSwitchFrame(""), claudeSwitchFrame("operator draft")}}
+	if err := gracefulSwitchExit(pane, "claude", nil); err == nil || !strings.Contains(err.Error(), "composer changed before exit keys") {
+		t.Fatalf("wanted changed-composer refusal, got %v", err)
+	}
+	if pane.exitKeys != 0 || len(pane.typed) != 0 || pane.forgot {
+		t.Fatalf("operator draft was touched: %+v", pane)
 	}
 }
 

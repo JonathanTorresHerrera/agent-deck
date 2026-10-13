@@ -12,6 +12,14 @@ func (s *Session) TypeCommand(command string) error {
 	return s.TypeCommandChecked(command, nil)
 }
 
+// SendClaudeExitKeys sends Claude's double Ctrl+D exit gesture in one tmux
+// command. Claude requires both keys within a short confirmation window;
+// separate tmux subprocesses can miss that window under WSL load.
+func (s *Session) SendClaudeExitKeys() error {
+	s.invalidateCache()
+	return runSendKeysBounded(keySenderExec(s.SocketName, "send-keys", "-t", s.Name, "C-d", "C-d"))
+}
+
 // TypeCommandChecked gives the caller a final pane check after the command is
 // typed but before Enter can submit it. On a refused check, clear the command
 // only when a fresh capture still shows exactly the injected draft.
