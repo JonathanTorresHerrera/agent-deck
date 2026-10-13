@@ -5964,6 +5964,7 @@ type sessionRenderState struct {
 	// expanded. Carrying the labels in the snapshot makes row rendering
 	// lock-free.
 	account        string // Stored slot; empty means inherited, not a login identity.
+	defaultSeat    string // Patch 47: the seat an unset slot runs on ("claude", "codex", ...)
 	accountDisplay accountPresentation
 	title          string // Instance.Title at snapshot time
 	autoName       bool   // session may show a captured/live task description as a suffix
@@ -6087,7 +6088,7 @@ func (h *Home) setAccountSlotsConfigured(configured bool) {
 	snap := make(map[string]sessionRenderState, len(previous))
 	display := newAccountPresentation("", configured)
 	for id, state := range previous {
-		if state.account == "" {
+		if state.account == "" && state.defaultSeat == "" { // Patch 47: a default seat keeps its tag
 			state.accountDisplay = display
 		}
 		snap[id] = state
@@ -6105,10 +6106,11 @@ func (h *Home) publishSessionRenderSnapshot(snap map[string]sessionRenderState) 
 	accounts := make(map[string]accountPresentation)
 	slotsConfigured := h.accountSlotsConfigured.Load()
 	for id, state := range snap {
-		display, ok := accounts[state.account]
+		key := state.account + "\x00" + state.defaultSeat // Patch 47
+		display, ok := accounts[key]
 		if !ok {
-			display = newAccountPresentation(state.account, slotsConfigured)
-			accounts[state.account] = display
+			display = seatPresentation(state.account, state.defaultSeat, slotsConfigured)
+			accounts[key] = display
 		}
 		state.accountDisplay = display
 		snap[id] = state
@@ -6144,6 +6146,9 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 			autoName:     inst.GetAutoName(),
 			autoNameDesc: inst.GetAutoNameDescription(),
 			archived:     inst.IsArchived(), // Patch 38
+		}
+		if state.account == "" { // Patch 47
+			state.defaultSeat = defaultSeatLabel(state.tool, inst.GroupPath)
 		}
 		state.aidaAsk, state.aidaAskOK = inst.LastAidaAsk() // Patch 24
 		// Look up pane title from the already-refreshed tmux cache.
@@ -6189,11 +6194,17 @@ func (h *Home) getSessionRenderState(inst *session.Instance) sessionRenderState 
 	// take Instance.mu (briefly, as a reader); it is bounded to sessions that a
 	// snapshot refresh has not seen yet, never the steady-state whole list.
 	account := inst.GetAccountThreadSafe()
+	tool := inst.GetToolThreadSafe()
+	defaultSeat := ""
+	if account == "" { // Patch 47
+		defaultSeat = defaultSeatLabel(tool, inst.GroupPath)
+	}
 	state := sessionRenderState{
 		status:         inst.GetStatusThreadSafe(),
-		tool:           inst.GetToolThreadSafe(),
+		tool:           tool,
 		account:        account,
-		accountDisplay: newAccountPresentation(account, h.accountSlotsConfigured.Load()),
+		defaultSeat:    defaultSeat,
+		accountDisplay: seatPresentation(account, defaultSeat, h.accountSlotsConfigured.Load()),
 		title:          inst.GetTitleThreadSafe(),
 		autoName:       inst.GetAutoName(),
 		autoNameDesc:   inst.GetAutoNameDescription(),
@@ -22536,7 +22547,10 @@ func (h *Home) renderSessionItem(
 	// full width does not fit. With an unconstrained listWidth it always renders.
 	accountBadge, accountWidth := "", 0
 	if rowAccount.compactWidth > 0 {
-		if listWidth <= 0 || max(0, listWidth-reserved-viewersWidth-1)-cellWidth(displayTitle) >= rowAccount.compactWidth {
+		// Patch 47: the tag is reserved ahead of the title, which truncates
+		// below; it is dropped only when the title would fall under its floor.
+		titleFloor := min(cellWidth(displayTitle), minSessionTitleWidth)
+		if listWidth <= 0 || max(0, listWidth-reserved-viewersWidth-1)-titleFloor >= rowAccount.compactWidth {
 			accountBadge, accountWidth = rowAccount.compact, rowAccount.compactWidth
 		}
 	}

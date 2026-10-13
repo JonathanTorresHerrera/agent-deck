@@ -44,41 +44,40 @@ func TestPatch38_RowShowsCompactAccountTagAndFullTitle(t *testing.T) {
 	}
 }
 
+// Patch 47 replaced patch 38's "title first" rule: the tag is reserved ahead of
+// the title, which truncates with "…"; the tag is dropped (whole, never as a
+// stub) only when the title would fall under its floor.
 func TestPatch38_NarrowRowKeepsTitleAndDropsTagWhole(t *testing.T) {
 	forceTrueColorProfile()
 	h := &Home{width: 140}
 	title := "WO-OMNI-GUIDED-HELP-01"
-	sawTitleNoTag, sawBoth := false, false
+	sawCutTitleWithTag, sawTagDropped := false, false
 	for w := 20; w <= 100; w++ {
 		row := p38Row(h, title, "claude-2", w)
-		hasTitle := strings.Contains(row, title)
 		hasTag := strings.Contains(row, " @claude-2")
-		if hasTag && !hasTitle {
-			t.Fatalf("listWidth %d: tag shown while the title is cut: %q", w, row)
-		}
 		if strings.Contains(row, "@") && !hasTag {
 			t.Fatalf("listWidth %d: tag shown as a stub: %q", w, row)
 		}
 		if cellWidth(row) > w {
 			t.Fatalf("listWidth %d: row is %d cells", w, cellWidth(row))
 		}
-		if hasTitle && !hasTag {
-			sawTitleNoTag = true
+		if !strings.Contains(row, "WO-OMNI") {
+			t.Fatalf("listWidth %d: title start must survive: %q", w, row)
 		}
-		if hasTitle && hasTag {
-			sawBoth = true
+		if hasTag && !strings.Contains(row, title) {
+			sawCutTitleWithTag = true
+		}
+		if !hasTag {
+			sawTagDropped = true
 		}
 	}
-	if !sawTitleNoTag || !sawBoth {
-		t.Fatalf("expected a width with title only (%v) and a width with title+tag (%v)", sawTitleNoTag, sawBoth)
+	if !sawCutTitleWithTag || !sawTagDropped {
+		t.Fatalf("expected a width where the title truncates but the tag stays (%v) and a width too narrow for both (%v)", sawCutTitleWithTag, sawTagDropped)
 	}
-	// And at a tight width the tag is gone entirely while the title survives.
+	// At 40 columns the tag now stays and the title takes the "…".
 	row := p38Row(h, title, "claude-2", 40)
-	if strings.Contains(row, "@") {
-		t.Fatalf("narrow row should have dropped the tag: %q", row)
-	}
-	if !strings.Contains(row, "WO-OMNI") {
-		t.Fatalf("title must survive: %q", row)
+	if !strings.Contains(row, " @claude-2") || !strings.Contains(row, "…") {
+		t.Fatalf("40 columns should keep the tag and truncate the title: %q", row)
 	}
 }
 

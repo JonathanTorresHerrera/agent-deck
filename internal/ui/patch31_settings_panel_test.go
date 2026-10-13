@@ -236,7 +236,7 @@ func TestPatch31Settings_ScrollMappingBringsEachRowIntoView(t *testing.T) {
 	}{
 		{SettingDensity, "List density"},
 		{SettingShowToolLabel, "Show tool name"},
-		{SettingShowInheritedAccount, "Show inherited account"},
+		{SettingShowInheritedAccount, "Show default seat"},
 		{SettingShowEmptyGroups, "Show empty groups"},
 		{SettingPreviewPct, "Preview split"},
 		{SettingPreviewOrientation, "Preview position"},

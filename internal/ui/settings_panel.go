@@ -1376,7 +1376,7 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n")
 
-	line = s.renderCheckbox("Show inherited account", s.showInheritedAccount) + " - [account:inherited] tag"
+	line = s.renderCheckbox("Show default seat", s.showInheritedAccount) + " - @claude/@codex on rows with no seat set"
 	if s.cursor == int(SettingShowInheritedAccount) {
 		line = highlightStyle.Render(line)
 	}
