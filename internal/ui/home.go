@@ -23994,12 +23994,13 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// so a collapsed section can be rewound to just its divider after the
 	// branch below has rendered.
 	agentSnap := b.String()
+	agentSeat := previewSeatSuffix(selected) // Patch 49: " @claude-3" on the tool header
 	agentHdr := ""
 
 	// Claude-specific info (session ID and MCPs)
 	if session.IsClaudeCompatible(selected.Tool) {
 		// Section divider for Claude info
-		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Claude", width-4) // Patch 38
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Claude"+agentSeat, width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24212,7 +24213,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Gemini-specific info (session ID)
 	if selected.Tool == "gemini" {
-		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Gemini", width-4) // Patch 38
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Gemini"+agentSeat, width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24242,7 +24243,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Cursor Agent CLI — MCP configuration for `cursor agent`
 	if selected.Tool == "cursor" {
-		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Cursor", width-4) // Patch 38
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Cursor"+agentSeat, width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24257,7 +24258,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// OpenCode-specific info (session ID)
 	if selected.Tool == "opencode" {
-		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "OpenCode", width-4) // Patch 38
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "OpenCode"+agentSeat, width-4) // Patch 38
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24315,7 +24316,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 
 	// Codex-specific info (session ID, detection)
 	if selected.Tool == "codex" {
-		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Codex", width-4) // Patch 38
+		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Codex"+agentSeat, width-4) // Patch 38
 
 		renderToolStatusLine(&b, selected.CodexSessionID, selected.CodexDetectedAt, true, selected.IsArchived(), selected.Status)
 		renderLaunchModelInfoLines(&b, selected)
@@ -24332,7 +24333,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			if toolDef.Icon != "" {
 				toolName = toolDef.Icon + " " + toolName
 			}
-			agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, toolName, width-4) // Patch 38
+			agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, toolName+agentSeat, width-4) // Patch 38
 
 			labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 
@@ -24379,16 +24380,17 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	}
 
 	// Patch 38 (responsive): collapsed tool section keeps only its divider.
+	// Patch 49: the Copy hint belongs to that section and collapses with it.
 	if agentHdr != "" && h.previewSectionCollapsed(previewSectionAgent) {
 		b.Reset()
 		b.WriteString(agentSnap)
 		b.WriteString(agentHdr)
 		b.WriteString("\n")
+	} else {
+		// Advertised for every tool, after the tool-specific sections, because the
+		// values above it cannot be reached with the mouse.
+		h.renderCopyHintLine(&b)
 	}
-
-	// Advertised for every tool, after the tool-specific sections, because the
-	// values above it cannot be reached with the mouse.
-	h.renderCopyHintLine(&b)
 
 	b.WriteString("\n")
 
