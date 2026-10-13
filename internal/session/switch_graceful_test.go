@@ -13,6 +13,7 @@ type scriptedSwitchPane struct {
 	reads      int
 	typed      []string
 	exitKeys   int
+	keys       []string
 	forgot     bool
 	captureErr error
 }
@@ -31,6 +32,10 @@ func (p *scriptedSwitchPane) CapturePaneFresh() (string, error) {
 func (p *scriptedSwitchPane) PanePID() (int, error) { return 42, nil }
 func (p *scriptedSwitchPane) SendClaudeExitKeys() error {
 	p.exitKeys++
+	return nil
+}
+func (p *scriptedSwitchPane) SendNamedKey(key string) error {
+	p.keys = append(p.keys, key)
 	return nil
 }
 func (p *scriptedSwitchPane) TypeCommandChecked(s string, check func(string) error, _ ...func(string) bool) error {
@@ -59,8 +64,68 @@ func TestGracefulSwitchExitWaitsForIdleAndAgentExit(t *testing.T) {
 	if err := gracefulSwitchExit(pane, "claude", nil); err != nil {
 		t.Fatal(err)
 	}
-	if pane.reads != 3 || pane.exitKeys != 1 || len(pane.typed) != 0 || !pane.forgot {
+	if pane.reads != 5 || pane.exitKeys != 1 || len(pane.typed) != 0 || !pane.forgot {
 		t.Fatalf("wrong switch exit sequence: %+v", pane)
+	}
+}
+
+func claudeBackgroundExitFrame(selected int) string {
+	lines := []string{
+		"Background work is running",
+		"The following will stop when you exit:",
+		"scheduled task · Runs once in 1m",
+		"1. Exit and stop tasks",
+		"2. Move to background and exit",
+		"3. Stay",
+		"Enter to confirm · Esc to cancel",
+	}
+	lines[2+selected] = "> " + lines[2+selected]
+	return strings.Join(lines, "\n")
+}
+
+func TestGracefulSwitchExitPreservesClaudeBackgroundTask(t *testing.T) {
+	oldNow, oldSleep, oldAlive := switchExitNow, switchExitSleep, switchExitAlive
+	defer func() { switchExitNow, switchExitSleep, switchExitAlive = oldNow, oldSleep, oldAlive }()
+	now := time.Unix(100, 0)
+	switchExitNow = func() time.Time { return now }
+	switchExitSleep = func(d time.Duration) { now = now.Add(d) }
+	probes := 0
+	switchExitAlive = func(int) bool { probes++; return probes < 2 }
+
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		keys   []string
+		exits  int
+	}{
+		{"dialog already open", []string{claudeBackgroundExitFrame(1), claudeBackgroundExitFrame(1), claudeBackgroundExitFrame(2)}, []string{"Down", "Enter"}, 0},
+		{"dialog after exit keys", []string{claudeSwitchFrame(""), claudeSwitchFrame(""), claudeBackgroundExitFrame(1), claudeBackgroundExitFrame(1), claudeBackgroundExitFrame(2)}, []string{"Down", "Enter"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probes = 0
+			pane := &scriptedSwitchPane{frames: tc.frames}
+			if err := gracefulSwitchExit(pane, "claude", nil); err != nil {
+				t.Fatal(err)
+			}
+			if !pane.forgot || pane.exitKeys != tc.exits || strings.Join(pane.keys, ",") != strings.Join(tc.keys, ",") {
+				t.Fatalf("wrong background exit sequence: %+v", pane)
+			}
+		})
+	}
+}
+
+func TestGracefulSwitchExitRefusesUnknownDialog(t *testing.T) {
+	oldNow, oldSleep := switchExitNow, switchExitSleep
+	defer func() { switchExitNow, switchExitSleep = oldNow, oldSleep }()
+	now := time.Unix(100, 0)
+	switchExitNow = func() time.Time { return now }
+	switchExitSleep = func(d time.Duration) { now = now.Add(d) }
+	pane := &scriptedSwitchPane{frames: []string{"Approve this operation?\n> 1. Yes\n  2. No\nEnter to confirm"}}
+	if err := gracefulSwitchExit(pane, "claude", nil); err == nil || !strings.Contains(err.Error(), "did not become idle") {
+		t.Fatalf("unknown dialog must block switch: %v", err)
+	}
+	if pane.exitKeys != 0 || len(pane.keys) != 0 || len(pane.typed) != 0 {
+		t.Fatalf("unknown dialog was touched: %+v", pane)
 	}
 }
 

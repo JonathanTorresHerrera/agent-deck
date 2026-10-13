@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ type switchExitPane interface {
 	PanePID() (int, error)
 	TypeCommandChecked(string, func(string) error, ...func(string) bool) error
 	SendClaudeExitKeys() error
+	SendNamedKey(string) error
 	ForgetCachedExistence()
 }
 
@@ -90,6 +92,7 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 		return switchStopFailure(errors.New("cannot identify switch source process: invalid pane PID"), false, false)
 	}
 	deadline := switchExitNow().Add(switchIdleWait)
+	exitDialogOpen := false
 	for {
 		raw, captureErr := pane.CapturePaneFresh()
 		if captureErr != nil {
@@ -98,6 +101,11 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 		ready, reason := switchComposerReady(raw, tool)
 		if ready {
 			break
+		}
+		if tool == "claude" {
+			if _, exitDialogOpen = claudeBackgroundExitSelection(raw); exitDialogOpen {
+				break
+			}
 		}
 		if !switchExitNow().Before(deadline) {
 			return switchStopFailure(fmt.Errorf("switch source did not become idle within %s (%s)", switchIdleWait, reason), false, false)
@@ -108,18 +116,23 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 		beforeExit()
 	}
 	if tool == "claude" {
-		// Claude's app:exit binding is Ctrl+D twice. This also works when a
-		// usage limit prevents /exit from leaving the running TUI. Confirm
-		// the composer is still empty immediately before sending the keys.
-		raw, captureErr := pane.CapturePaneFresh()
-		if captureErr != nil {
-			return switchStopFailure(fmt.Errorf("cannot recheck switch source composer: %w", captureErr), false, false)
-		}
-		if ready, reason := switchComposerReady(raw, tool); !ready {
-			return switchStopFailure(fmt.Errorf("source composer changed before exit keys (%s)", reason), false, false)
-		}
-		if err := pane.SendClaudeExitKeys(); err != nil {
-			return switchStopFailure(fmt.Errorf("send agent exit keys: %w", err), false, false)
+		if exitDialogOpen {
+			if err := confirmClaudeBackgroundExit(pane); err != nil {
+				return switchStopFailure(fmt.Errorf("confirm existing Claude exit dialog: %w", err), false, false)
+			}
+		} else {
+			// Claude's app:exit binding is Ctrl+D twice. This also works when
+			// a usage limit prevents /exit from leaving the running TUI.
+			raw, captureErr := pane.CapturePaneFresh()
+			if captureErr != nil {
+				return switchStopFailure(fmt.Errorf("cannot recheck switch source composer: %w", captureErr), false, false)
+			}
+			if ready, reason := switchComposerReady(raw, tool); !ready {
+				return switchStopFailure(fmt.Errorf("source composer changed before exit keys (%s)", reason), false, false)
+			}
+			if err := pane.SendClaudeExitKeys(); err != nil {
+				return switchStopFailure(fmt.Errorf("send agent exit keys: %w", err), false, false)
+			}
 		}
 	} else if err := pane.TypeCommandChecked("/exit", func(raw string) error {
 		draft, visible := send.CodexComposerDraft(raw, tmux.StripANSI)
@@ -132,6 +145,17 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 	}
 	deadline = switchExitNow().Add(switchExitWait)
 	for switchExitAlive(pid) {
+		if tool == "claude" && !exitDialogOpen {
+			raw, captureErr := pane.CapturePaneFresh()
+			if captureErr == nil {
+				if _, open := claudeBackgroundExitSelection(raw); open {
+					if err := confirmClaudeBackgroundExit(pane); err != nil {
+						return switchStopFailure(fmt.Errorf("confirm Claude exit dialog: %w", err), true, false)
+					}
+					exitDialogOpen = true
+				}
+			}
+		}
 		if !switchExitNow().Before(deadline) {
 			return switchStopFailure(fmt.Errorf("switch source did not exit within %s after exit request", switchExitWait), true, false)
 		}
@@ -139,6 +163,67 @@ func gracefulSwitchExit(pane switchExitPane, tool string, beforeExit func()) err
 	}
 	pane.ForgetCachedExistence()
 	return nil
+}
+
+// Claude asks what to do with scheduled tasks before exiting. Only this
+// exact dialog is safe to automate; other dialogs still block the switch.
+func claudeBackgroundExitSelection(raw string) (int, bool) {
+	lines := strings.Split(tmux.StripANSI(raw), "\n")
+	if len(lines) > 30 {
+		lines = lines[len(lines)-30:]
+	}
+	content := strings.Join(lines, "\n")
+	if !strings.Contains(content, "Background work is running") ||
+		!strings.Contains(content, "Exit and stop tasks") ||
+		!strings.Contains(content, "Move to background and exit") ||
+		!strings.Contains(content, "Stay") ||
+		!strings.Contains(content, "Enter to confirm") {
+		return 0, false
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "> ") && !strings.HasPrefix(line, "❯ ") {
+			continue
+		}
+		switch {
+		case strings.Contains(line, "1. Exit and stop tasks"):
+			return 1, true
+		case strings.Contains(line, "2. Move to background and exit"):
+			return 2, true
+		case strings.Contains(line, "3. Stay"):
+			return 3, true
+		}
+	}
+	return 0, false
+}
+
+func confirmClaudeBackgroundExit(pane switchExitPane) error {
+	raw, err := pane.CapturePaneFresh()
+	if err != nil {
+		return err
+	}
+	selected, ok := claudeBackgroundExitSelection(raw)
+	if !ok {
+		return errors.New("Claude background exit dialog changed")
+	}
+	if selected != 2 {
+		key := "Down"
+		if selected == 3 {
+			key = "Up"
+		}
+		if err := pane.SendNamedKey(key); err != nil {
+			return err
+		}
+		switchExitSleep(100 * time.Millisecond)
+		raw, err = pane.CapturePaneFresh()
+		if err != nil {
+			return err
+		}
+		if selected, ok = claudeBackgroundExitSelection(raw); !ok || selected != 2 {
+			return errors.New("Claude background exit option was not selected")
+		}
+	}
+	return pane.SendNamedKey("Enter")
 }
 
 func switchComposerDraft(raw, tool string) string {
