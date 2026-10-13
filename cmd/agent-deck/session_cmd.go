@@ -1924,12 +1924,19 @@ func handleSessionShow(profile string, args []string) {
 		"title_locked":         inst.TitleLocked,
 		"tool":                 inst.Tool,
 		"account":              inst.Account,
+		"archived":             !inst.ArchivedAt.IsZero(),
 		"created_at":           inst.CreatedAt.Format(time.RFC3339),
 		// Always present (see the #1924 "wrapper" reasoning above): an
 		// absent key would be ambiguous with "the hook never fired", when
 		// what actually happened is "this build predates the field".
 		"hook_status":       hookStatus,
 		"hook_status_fresh": hookStatusFresh,
+	}
+	if !inst.ArchivedAt.IsZero() {
+		jsonData["archived_at"] = inst.ArchivedAt.Format(time.RFC3339)
+	}
+	if inst.SupersededBy != "" {
+		jsonData["superseded_by"] = inst.SupersededBy
 	}
 	// Honest Status v2: additive substate refinement (omit when none so the
 	// existing keys stay byte-stable for consumers that don't expect it).

@@ -259,7 +259,7 @@ func crossHarnessTargetID(result *session.CrossHarnessSwitchResult) string {
 func crossHarnessResultFields(inst *session.Instance, r *session.CrossHarnessSwitchResult) map[string]any {
 	return map[string]any{
 		"operation_id": r.OperationID, "target_id": crossHarnessTargetID(r),
-		"target_created": r.TargetCreated, "target_ready": r.TargetReady,
+		"target_created": r.TargetCreated, "target_started": r.TargetStarted, "target_ready": r.TargetReady,
 		"missing_contract": r.MissingContract, "configured_account": r.ConfiguredAccount,
 		"authentication": r.Authentication, "context_delivery": r.ContextDelivery,
 		"semantic_acceptance": r.SemanticAcceptance, "source_sha256": r.SourceSHA256,
@@ -310,6 +310,11 @@ func crossHarnessPresentationStatus(result *session.CrossHarnessSwitchResult) st
 	}
 	if result.Pending {
 		return "pending"
+	}
+	// A recovery call observes an already-created target, so TargetCreated is
+	// false for that call even when the durable handoff is now complete.
+	if result.TargetReady {
+		return "success"
 	}
 	return switchPresentationStatus(result.TargetCreated, result.TargetReady)
 }

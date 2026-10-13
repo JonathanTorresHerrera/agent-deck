@@ -13,7 +13,7 @@ import (
 // command emits must say so, including the failure payload.
 func TestCrossHarnessSwitchPayloads_ReportCommittedSourceArchive(t *testing.T) {
 	source := &session.Instance{ID: "src", SupersededBy: "tgt"}
-	ready := &session.CrossHarnessSwitchResult{Target: &session.Instance{ID: "tgt"}, TargetCreated: true, TargetReady: true}
+	ready := &session.CrossHarnessSwitchResult{Target: &session.Instance{ID: "tgt"}, TargetCreated: true, TargetStarted: true, TargetReady: true}
 	pending := &session.CrossHarnessSwitchResult{Target: &session.Instance{ID: "tgt"}, TargetCreated: true, Pending: true}
 
 	failed := crossHarnessFailurePayload(source, ready, session.ErrCrossHarnessRecoveryRequired)
@@ -27,7 +27,7 @@ func TestCrossHarnessSwitchPayloads_ReportCommittedSourceArchive(t *testing.T) {
 	if p := crossHarnessPendingPayload(source, pending); p["source_archived"] != false {
 		t.Fatalf("pending payload: %v", p)
 	}
-	if p := crossHarnessSuccessPayload(source, ready); p["source_archived"] != true || p["source_superseded_by"] != "tgt" {
+	if p := crossHarnessSuccessPayload(source, ready); p["source_archived"] != true || p["source_superseded_by"] != "tgt" || p["target_started"] != true {
 		t.Fatalf("success payload: %v", p)
 	}
 }

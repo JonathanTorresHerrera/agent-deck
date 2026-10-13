@@ -33,6 +33,9 @@ func TestCrossHarnessSwitchPresentationStatus(t *testing.T) {
 	if got := crossHarnessPresentationStatus(&session.CrossHarnessSwitchResult{TargetCreated: true, TargetReady: true}); got != "success" {
 		t.Fatalf("ready cross-harness status = %q, want success", got)
 	}
+	if got := crossHarnessPresentationStatus(&session.CrossHarnessSwitchResult{TargetReady: true}); got != "success" {
+		t.Fatalf("recovered cross-harness status = %q, want success", got)
+	}
 	if got := crossHarnessPresentationStatus(nil); got != "failed" {
 		t.Fatalf("absent cross-harness status = %q, want failed", got)
 	}
