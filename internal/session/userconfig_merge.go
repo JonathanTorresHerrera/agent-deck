@@ -120,6 +120,7 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 	}
 	merged.Display.ShowToolLabel = panel.Display.ShowToolLabel
 	merged.Display.ShowInheritedAccount = panel.Display.ShowInheritedAccount
+	merged.Display.RowSeatTags = panel.Display.RowSeatTags // Patch 51
 	merged.Display.ShowEmptyGroups = panel.Display.ShowEmptyGroups
 	// Patch 38 (responsive): "(Aida)" title-suffix toggle. Must be copied or the
 	// panel's value is silently dropped on save.

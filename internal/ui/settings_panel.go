@@ -133,6 +133,7 @@ type SettingsPanel struct {
 	density              int // index into densityValues
 	showToolLabel        bool
 	showInheritedAccount bool
+	rowSeatTags          int // Patch 51: index into rowSeatTagNames
 	showEmptyGroups      bool
 	showAidaSuffix       bool // Patch 38 (responsive)
 	showProviderBadge    bool // Patch 45
@@ -424,6 +425,7 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 	}
 	s.showToolLabel = config.Display.ShowToolLabel
 	s.showInheritedAccount = config.Display.ShowInheritedAccount
+	s.rowSeatTags = rowSeatTagIndex(config.Display.GetRowSeatTags())
 	s.showEmptyGroups = config.Display.ShowEmptyGroups
 	s.showAidaSuffix = config.Display.ShowAidaSuffix
 	s.showProviderBadge = config.Display.ShowProviderBadge
@@ -591,7 +593,8 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 		config.Display.Density = densityValues[s.density]
 	}
 	config.Display.ShowToolLabel = s.showToolLabel
-	config.Display.ShowInheritedAccount = s.showInheritedAccount
+	config.Display.RowSeatTags = rowSeatTagValues[s.rowSeatTags] // Patch 51
+	config.Display.ShowInheritedAccount = config.Display.RowSeatTags == session.RowSeatTagsAll
 	config.Display.ShowEmptyGroups = s.showEmptyGroups
 	config.Display.ShowAidaSuffix = s.showAidaSuffix
 	config.Display.ShowProviderBadge = s.showProviderBadge
@@ -822,6 +825,14 @@ func (s *SettingsPanel) adjustValue(delta int) bool {
 			changed = true
 		}
 
+	case SettingShowInheritedAccount: // Patch 51
+		newVal := s.rowSeatTags + delta
+		if newVal >= 0 && newVal < len(rowSeatTagValues) {
+			s.rowSeatTags = newVal
+			s.showInheritedAccount = rowSeatTagValues[newVal] == session.RowSeatTagsAll
+			changed = true
+		}
+
 	case SettingPreviewOrientation:
 		newVal := s.previewOrientation + delta
 		if newVal >= 0 && newVal < len(previewOrientationNames) {
@@ -951,8 +962,9 @@ func (s *SettingsPanel) toggleValue() bool {
 		s.showToolLabel = !s.showToolLabel
 		return true
 
-	case SettingShowInheritedAccount:
-		s.showInheritedAccount = !s.showInheritedAccount
+	case SettingShowInheritedAccount: // Patch 51: Space cycles All -> Named -> Off
+		s.rowSeatTags = (s.rowSeatTags + 1) % len(rowSeatTagValues)
+		s.showInheritedAccount = rowSeatTagValues[s.rowSeatTags] == session.RowSeatTagsAll
 		return true
 
 	case SettingShowEmptyGroups:
@@ -1384,7 +1396,7 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n")
 
-	line = s.renderCheckbox("Show default seat", s.showInheritedAccount) + " - @claude/@codex on rows with no seat set"
+	line = "Seat tags on rows: " + s.renderRadioGroup(rowSeatTagNames, s.rowSeatTags, s.cursor == int(SettingShowInheritedAccount)) // Patch 51
 	if s.cursor == int(SettingShowInheritedAccount) {
 		line = highlightStyle.Render(line)
 	}

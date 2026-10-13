@@ -3865,6 +3865,12 @@ type DisplaySettings struct {
 	// badge always shows regardless — it carries information.
 	ShowInheritedAccount bool `toml:"show_inherited_account,omitempty"`
 
+	// RowSeatTags (patch 51) picks which seat tags the list rows show:
+	// "all" (stored seats and the default @claude/@codex), "named" (stored
+	// seats only) or "off". Unset falls back to show_inherited_account
+	// (true = "all", false = "named"). The PREVIEW header always names it.
+	RowSeatTags string `toml:"row_seat_tags,omitempty"`
+
 	// ShowEmptyGroups keeps groups with zero sessions (recursive, in the
 	// rendered archive partition) visible in the list. Default: false (hidden).
 	ShowEmptyGroups bool `toml:"show_empty_groups,omitempty"`
@@ -6174,4 +6180,24 @@ func (a WatcherAlertsSettings) GetDebounceMinutes() int {
 		return a.DebounceMinutes
 	}
 	return 15
+}
+
+// Patch 51: [display] row_seat_tags values.
+const (
+	RowSeatTagsAll   = "all"
+	RowSeatTagsNamed = "named"
+	RowSeatTagsOff   = "off"
+)
+
+// GetRowSeatTags resolves row_seat_tags, falling back to the older
+// show_inherited_account toggle when it is unset or unknown.
+func (d DisplaySettings) GetRowSeatTags() string {
+	switch d.RowSeatTags {
+	case RowSeatTagsAll, RowSeatTagsNamed, RowSeatTagsOff:
+		return d.RowSeatTags
+	}
+	if d.ShowInheritedAccount {
+		return RowSeatTagsAll
+	}
+	return RowSeatTagsNamed
 }

@@ -689,6 +689,7 @@ type Home struct {
 	wrapRows             bool            // Patch 48: title on line 1, details on line 2
 	providerFilter       string          // Patch 45: show only this provider's sessions ("" = all); set by clicking a provider count
 	showInheritedAccount bool            // " [account:inherited]" badge (default off; named slots always show)
+	rowSeatTags          string          // Patch 51: all | named | off ("" = from showInheritedAccount)
 	showEmptyGroups      bool            // keep zero-session groups in the list (default off)
 	showAidaSuffix       bool            // Patch 38: keep the " (Aida)" title suffix on rows (default off = stripped)
 	keptEmptyGroups      map[string]bool // groups created this run: visible even while empty
@@ -22512,7 +22513,7 @@ func (h *Home) renderSessionItem(
 		cachedViewers, cachedViewersKnown := inst.ViewersCached()
 		viewersBadgeText, _ := fitViewersBadge(cachedViewers, cachedViewersKnown, selected, -1)
 		rowAccount := instState.accountDisplay
-		if instState.account == "" && !h.showInheritedAccount {
+		if !h.rowSeatTagShown(instState.account) { // Patch 51
 			rowAccount = accountPresentation{}
 		}
 		accountBadge := ""
@@ -22588,7 +22589,7 @@ func (h *Home) renderSessionItem(
 	// is meaningful. Patch 38: eligible, not guaranteed; the tag is dropped
 	// whole when the row has no room left after the title.
 	rowAccount := instState.accountDisplay
-	if instState.account == "" && !h.showInheritedAccount {
+	if !h.rowSeatTagShown(instState.account) { // Patch 51
 		rowAccount = accountPresentation{}
 	}
 	if listWidth > 0 {

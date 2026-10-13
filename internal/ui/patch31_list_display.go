@@ -19,6 +19,10 @@ func (h *Home) applyListDisplaySettings(d session.DisplaySettings) {
 	h.listDensity = d.GetDensity()
 	h.showToolLabel = d.ShowToolLabel
 	h.showInheritedAccount = d.ShowInheritedAccount
+	h.rowSeatTags = "" // Patch 51: only an explicit, valid row_seat_tags is cached
+	if d.RowSeatTags == d.GetRowSeatTags() {
+		h.rowSeatTags = d.RowSeatTags
+	}
 	h.showEmptyGroups = d.ShowEmptyGroups
 	h.showAidaSuffix = d.ShowAidaSuffix       // Patch 38 (responsive)
 	h.showProviderBadge = d.ShowProviderBadge // Patch 45
