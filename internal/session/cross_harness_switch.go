@@ -654,6 +654,14 @@ func crossHarnessPlanCommand(target *Instance, plan *FreshTargetLaunchPlan, _ st
 	for _, arg := range plan.NativeArgs {
 		args = append(args, shellescape.Quote(arg))
 	}
+	if plan.Target.Tool == "codex" {
+		// Codex may execute notify from a shared app-server process whose
+		// inherited AGENTDECK_INSTANCE_ID belongs to another Deck session.
+		// Bind the notification to this exact target in Codex's per-launch
+		// configuration, independently of the app-server environment.
+		notify := fmt.Sprintf(`notify=["env",%q,"agent-deck","codex-notify"]`, "AGENTDECK_INSTANCE_ID="+target.ID)
+		args = append(args, shellescape.Quote("-c"), shellescape.Quote(notify))
+	}
 	// Identity injection (identity_injection.go): the switched-to session is a
 	// NEW instance in a NEW harness, so it gets its own identity block, built
 	// from the target record, through the target harness's native flag. Added
