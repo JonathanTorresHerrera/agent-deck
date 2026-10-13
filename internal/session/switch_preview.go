@@ -281,16 +281,9 @@ func PreviewSwitchWithMaxBytesAndSnapshot(cfg *UserConfig, inst *Instance, targe
 	// Resolve target account status and config dir (tool-specific).
 	targetDir, targetStat := resolveTargetAccountInfo(cfg, targetHarness, targetAccount)
 	if targetAccount == "" && IsClaudeCompatible(targetHarness) {
-		target := *inst
-		target.Account = ""
-		targetDir = GetClaudeConfigDirForInstance(&target)
+		targetDir = GetClaudeConfigDirForInstance(defaultSwitchTargetInstance(inst, targetHarness))
 	} else if targetAccount == "" && IsCodexCompatible(targetHarness) {
-		target := *inst
-		target.Account = ""
-		if !IsCodexCompatible(inst.Tool) {
-			target.Tool, target.Command = targetHarness, targetHarness
-		}
-		targetDir = CodexHomeDirForInstance(&target)
+		targetDir = CodexHomeDirForInstance(defaultSwitchTargetInstance(inst, targetHarness))
 	}
 	preview.TargetAccountDir = targetDir
 	preview.TargetAccountStat = targetStat
@@ -417,6 +410,17 @@ func PreviewSwitchWithMaxBytesAndSnapshot(cfg *UserConfig, inst *Instance, targe
 	}
 
 	return preview
+}
+
+// defaultSwitchTargetInstance supplies the exact launch resolver inputs for an
+// inherited account without copying Instance's mutex or changing the source.
+func defaultSwitchTargetInstance(source *Instance, harness string) *Instance {
+	target := &Instance{Title: source.Title, GroupPath: source.GroupPath, ProjectPath: source.ProjectPath,
+		Tool: source.Tool, Command: source.Command}
+	if IsCodexCompatible(harness) && !IsCodexCompatible(source.Tool) {
+		target.Tool, target.Command = harness, harness
+	}
+	return target
 }
 
 // lookPathHarness resolves a target harness command; tests stub it.

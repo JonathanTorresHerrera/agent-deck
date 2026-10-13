@@ -275,9 +275,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 		// Resolve the same inherited config dir the restarted instance will use.
 		// This may come from conductor, group, environment, profile, or global
 		// configuration, so a fixed ~/.claude fallback is unsafe.
-		target := *inst
-		target.Account = ""
-		targetDir = GetClaudeConfigDirForInstance(&target)
+		targetDir = GetClaudeConfigDirForInstance(defaultSwitchTargetInstance(inst, preview.TargetHarness))
 	}
 	if targetDir == "" {
 		return nil, fmt.Errorf("target Claude account %q has no resolved config dir", preview.TargetAccount)
@@ -458,9 +456,7 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	}
 	targetHome := preview.TargetAccountDir
 	if preview.TargetAccount == "" {
-		target := *inst
-		target.Account = ""
-		targetHome = CodexHomeDirForInstance(&target)
+		targetHome = CodexHomeDirForInstance(defaultSwitchTargetInstance(inst, preview.TargetHarness))
 	}
 	if targetHome == "" {
 		return nil, fmt.Errorf("target Codex account %q has no resolved home", preview.TargetAccount)
