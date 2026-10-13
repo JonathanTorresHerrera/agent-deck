@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +48,21 @@ func switchStopFailure(err error, submitted, terminated bool) error {
 var switchExitNow = time.Now
 var switchExitSleep = time.Sleep
 var switchExitAlive = func(pid int) bool {
+	// A WSL Windows process can remain as an unreaped /init zombie after its
+	// tmux pane has closed. kill(pid, 0) still succeeds for that defunct PID,
+	// so a signal-only probe falsely times out a completed graceful exit.
+	if status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			if !strings.HasPrefix(line, "State:") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) > 1 && (fields[1] == "Z" || fields[1] == "X") {
+				return false
+			}
+			break
+		}
+	}
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }

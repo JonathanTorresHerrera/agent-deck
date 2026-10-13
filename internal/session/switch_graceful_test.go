@@ -2,7 +2,11 @@ package session
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +54,31 @@ func (p *scriptedSwitchPane) ForgetCachedExistence() { p.forgot = true }
 func claudeSwitchFrame(draft string) string {
 	border := strings.Repeat("─", 40)
 	return "prior output\n" + border + "\n❯ " + draft + "\n" + border + "\n"
+}
+
+func TestSwitchExitAliveTreatsZombieAsExited(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires /proc process state")
+	}
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", cmd.Process.Pid))
+		if err == nil && strings.Contains(string(status), "State:\tZ") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d never became a zombie: %v", cmd.Process.Pid, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if switchExitAlive(cmd.Process.Pid) {
+		t.Fatal("zombie source must count as exited")
+	}
 }
 
 func TestGracefulSwitchExitWaitsForIdleAndAgentExit(t *testing.T) {
