@@ -226,6 +226,32 @@ func TestEditSessionDialogAccountRow(t *testing.T) {
 	}
 }
 
+// Existing titles may exceed the new-session name limit. Opening the editor
+// must preserve such a title so a seat change remains an account-only edit.
+func TestEditSessionDialogAccountSwitchPreservesLongTitle(t *testing.T) {
+	withAccountsConfig(t, "claude-2", "claude-3")
+
+	inst := sampleInstance()
+	inst.Title = "WO-DECK-SEAT-SWITCH-PARITY-01 manual switch parity (Aida)"
+	inst.Account = "claude-3"
+	d := NewEditSessionDialog()
+	d.Show(inst)
+	if got := d.GetChanges(inst); len(got) != 0 {
+		t.Fatalf("opening a long-titled session changed fields: %+v", got)
+	}
+
+	idx := accountFieldIndex(t, d)
+	for i, account := range d.fields[idx].pillOptions {
+		if account == "claude-2" {
+			d.fields[idx].pillCursor = i
+			break
+		}
+	}
+	if got := d.GetChanges(inst); len(got) != 1 || got[0].Field != session.FieldAccount || got[0].Value != "claude-2" {
+		t.Fatalf("account switch should change only the account, got %+v", got)
+	}
+}
+
 // Without configured accounts the Edit dialog stays exactly as it was.
 func TestEditSessionDialogAccountRowHiddenWithoutAccounts(t *testing.T) {
 	withAccountsConfig(t)

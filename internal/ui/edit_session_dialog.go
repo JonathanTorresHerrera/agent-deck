@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -81,7 +82,7 @@ func (d *EditSessionDialog) Show(inst *session.Instance) {
 
 	d.fields = []editField{
 		{key: session.FieldTitle, label: "Title", kind: editFieldText,
-			input: mkInput("Session title", MaxNameLength, inst.Title)},
+			input: mkTitleInput(inst.Title)},
 		{key: session.FieldTool, label: "Harness (choose destination first)", kind: editFieldPills,
 			pillOptions: tools, pillCursor: toolCursor},
 		// Pin position — anchors the session to the top/bottom of its group,
@@ -239,6 +240,17 @@ func mkInput(placeholder string, charLimit int, initial string) textinput.Model 
 	return ti
 }
 
+// Existing titles can exceed the limit used for new names (for example,
+// imported or CLI-renamed sessions). Keep their full value in the editor so
+// an account switch does not appear to include an unintended title edit.
+func mkTitleInput(title string) textinput.Model {
+	limit := MaxNameLength
+	if length := utf8.RuneCountInString(title); length > limit {
+		limit = length
+	}
+	return mkInput("Session title", limit, title)
+}
+
 // ShowRemote opens the dialog for a session owned by remoteName. The remote
 // row carries title, harness and account slot, so those are the editable
 // rows: title through the remote's rename, harness/account through the
@@ -260,7 +272,7 @@ func (d *EditSessionDialog) ShowRemote(info session.RemoteSessionInfo, remoteNam
 	tools, toolCursor := toolPillsForInstance(info.Tool)
 	d.fields = []editField{
 		{key: session.FieldTitle, label: "Title", kind: editFieldText,
-			input: mkInput("Session title", MaxNameLength, info.Title)},
+			input: mkTitleInput(info.Title)},
 		{key: session.FieldTool, label: "Harness (choose destination first)", kind: editFieldPills,
 			pillOptions: tools, pillCursor: toolCursor},
 	}
