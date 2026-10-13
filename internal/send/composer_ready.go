@@ -149,8 +149,14 @@ var spinnerLine = regexp.MustCompile(`^\s*\S\s+[A-Z][\p{L}'-]*…\s*\(\d`)
 
 // IsComposerBorderLine reports a composer border: a plain divider, or the
 // top border Claude 2.1.296 draws with the session name in it
-// ("──────── my-session ─").
+// ("──────── my-session ─"). Claude draws its borders at column 0 and indents
+// every draft continuation row by two spaces, so an indented dash run is text
+// the operator typed inside a draft, never a border: taking it for one framed
+// the composer below its prompt row and hid the draft from the guard.
 func IsComposerBorderLine(line string) bool {
+	if line == "" || line[0] == ' ' || line[0] == '	' {
+		return false
+	}
 	return IsComposerDividerLine(line) || strings.HasPrefix(strings.TrimSpace(line), strings.Repeat("─", 10))
 }
 
