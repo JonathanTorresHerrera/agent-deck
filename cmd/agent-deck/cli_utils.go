@@ -908,6 +908,8 @@ func SubstateLabel(sub session.Substate) string {
 	switch sub {
 	case session.SubstateModelUnavailable:
 		return "model unavailable"
+	case session.SubstateModelUnsupported:
+		return "model not supported"
 	case session.SubstateAuth401:
 		return "auth (login)"
 	case session.SubstateUsageLimit:

@@ -5668,7 +5668,12 @@ func (s *Session) hasBusyIndicatorResolved(content string) bool {
 	}
 	isClaude := strings.EqualFold(tool, "claude")
 
-	if found {
+	// Codex's busy shapes are all matched above (live status line, interrupt
+	// provenance incl. the legacy "⠋ Working (esc to interrupt)" form). A bare
+	// glyph proves nothing for it: the v0.161 splash logo is braille art whose
+	// rows can start with a spinner frame ("⠙⠛⠛⠛⠻⠛⢿…"), which held fresh,
+	// idle sessions at running and refused every first message.
+	if found && !strings.EqualFold(tool, "codex") {
 		// For Claude, braille spinner frames are authoritative.
 		// Asterisk-style frames can appear in non-active contexts, so require context.
 		lineClean := StripANSI(spinnerLine)
