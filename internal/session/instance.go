@@ -8840,7 +8840,11 @@ func (i *Instance) GetJSONLPath() string {
 	if !i.TranscriptIsResolvableLocally() {
 		return ""
 	}
-	return resolveClaudeTranscriptPath(GetClaudeConfigDir(), i.ProjectPath, i.ClaudeSessionID)
+	// Patch 52: the instance's own config dir (its seat, conductor or group),
+	// not the process-wide one. A session on a seat (claude-2, claude-3) keeps
+	// its transcript under that seat's dir, so the process-wide lookup always
+	// missed and forced the /mnt/c projects rescan every few seconds.
+	return resolveClaudeTranscriptPath(GetClaudeConfigDirForInstance(i), i.ProjectPath, i.ClaudeSessionID)
 }
 
 // ResolveClaudeTranscriptPath returns the path to the Claude JSONL transcript

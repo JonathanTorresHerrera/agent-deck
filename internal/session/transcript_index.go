@@ -38,19 +38,26 @@ type transcriptIndex struct {
 var (
 	transcriptIndexMu         sync.Mutex
 	transcriptIndexes         = map[string]*transcriptIndex{}
+	transcriptIndexBuilding   = map[string]chan struct{}{}
 	transcriptIndexBuildCount int
 )
 
 // lookupTranscriptByID returns the path of <sessionID>.jsonl in any direct
 // subdirectory of projectsDir, or "".
+//
+// Patch 52: transcriptIndexMu guards only the maps, never the scan. A rescan
+// of a /mnt/c projects dir takes ~1.2 s; held under the shared lock it stalled
+// every status worker in the TUI sweep behind it. Now one caller scans while
+// the others use the previous index (or, for a dir never scanned, wait for
+// the first scan).
 func lookupTranscriptByID(projectsDir, sessionID string) string {
 	name := sessionID + ".jsonl"
-	transcriptIndexMu.Lock()
-	defer transcriptIndexMu.Unlock()
 	now := transcriptIndexNow()
+	transcriptIndexMu.Lock()
 	idx := transcriptIndexes[projectsDir]
+	transcriptIndexMu.Unlock()
 	if idx == nil || now.Sub(idx.builtAt) > transcriptIndexTTL {
-		idx = buildTranscriptIndex(projectsDir, now)
+		idx = rebuildTranscriptIndex(projectsDir, now)
 	}
 	// A hit is confirmed with one stat, so a transcript deleted since the scan
 	// is not handed out (the Glob this replaces never returned a gone file).
@@ -60,7 +67,7 @@ func lookupTranscriptByID(projectsDir, sessionID string) string {
 		}
 	}
 	if now.Sub(idx.builtAt) >= transcriptIndexMissRefresh {
-		idx = buildTranscriptIndex(projectsDir, now)
+		idx = rebuildTranscriptIndex(projectsDir, now)
 		if p, ok := idx.paths[name]; ok {
 			return p
 		}
@@ -68,11 +75,43 @@ func lookupTranscriptByID(projectsDir, sessionID string) string {
 	return ""
 }
 
-// buildTranscriptIndex scans projectsDir once. Caller holds transcriptIndexMu.
-func buildTranscriptIndex(projectsDir string, now time.Time) *transcriptIndex {
+// rebuildTranscriptIndex scans projectsDir unless another caller already is:
+// then it returns the previous index without waiting, or waits when there is
+// none yet. The returned index is never mutated after it is published.
+func rebuildTranscriptIndex(projectsDir string, now time.Time) *transcriptIndex {
+	transcriptIndexMu.Lock()
+	if busy, ok := transcriptIndexBuilding[projectsDir]; ok {
+		prev := transcriptIndexes[projectsDir]
+		transcriptIndexMu.Unlock()
+		if prev != nil {
+			return prev
+		}
+		<-busy
+		transcriptIndexMu.Lock()
+		defer transcriptIndexMu.Unlock()
+		if idx := transcriptIndexes[projectsDir]; idx != nil {
+			return idx
+		}
+		return &transcriptIndex{builtAt: now, paths: map[string]string{}}
+	}
+	done := make(chan struct{})
+	transcriptIndexBuilding[projectsDir] = done
 	transcriptIndexBuildCount++
-	idx := &transcriptIndex{builtAt: now, paths: map[string]string{}}
+	transcriptIndexMu.Unlock()
+
+	idx := scanTranscriptIndex(projectsDir, now)
+
+	transcriptIndexMu.Lock()
 	transcriptIndexes[projectsDir] = idx
+	delete(transcriptIndexBuilding, projectsDir)
+	transcriptIndexMu.Unlock()
+	close(done)
+	return idx
+}
+
+// scanTranscriptIndex reads projectsDir once. It takes no lock.
+func scanTranscriptIndex(projectsDir string, now time.Time) *transcriptIndex {
+	idx := &transcriptIndex{builtAt: now, paths: map[string]string{}}
 	dirs, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return idx
