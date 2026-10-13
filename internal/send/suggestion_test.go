@@ -43,6 +43,23 @@ func TestComposerBodyIsSuggestion_DimGhostIsDetected(t *testing.T) {
 	}
 }
 
+func TestClaudeComposerReady_ASCIIGhostIsNotADraft(t *testing.T) {
+	// Windows-native Claude uses '>' instead of the older glyphs. This is a
+	// dimmed history suggestion in an empty composer, captured from a live pane.
+	ghost := "\x1b[39m> \x1b[2mdelete the scratch clone\x1b[0m"
+	raw := pane(ghost)
+	if !ComposerBodyIsSuggestion(raw) {
+		t.Fatal("ASCII composer suggestion was classified as a draft")
+	}
+	if ready := ClaudeComposerReady(raw); !ready.Ready || !ready.Ghost {
+		t.Fatalf("ASCII composer suggestion should be idle: %+v", ready)
+	}
+	operator := pane("\x1b[39m> delete the scratch clone")
+	if ready := ClaudeComposerReady(operator); ready.Ready || ready.Code != ComposerCodeDraft {
+		t.Fatalf("real ASCII composer draft must still block switching: %+v", ready)
+	}
+}
+
 func TestComposerBodyIsSuggestion_RealDraftIsNotASuggestion(t *testing.T) {
 	if ComposerBodyIsSuggestion(pane(fixtureRealDraftComposer)) {
 		t.Fatal("a real operator draft must NOT be classified as a suggestion")
