@@ -157,10 +157,17 @@ func isComposerSpace(r rune) bool {
 
 // ComposerBodyIsSuggestion reports whether the composer in raw (ANSI-bearing)
 // pane content currently shows a dim- or grey-rendered Claude autosuggestion
-// rather than operator input. The composer is the LAST marker line in the pane;
-// earlier marker lines are submitted history.
+// rather than operator input. The composer is read from the border-framed
+// block CurrentComposerPrompt reads, where ">" (Claude Code 2.1.x) is a prompt
+// marker too; a pane with no framed prompt falls back to the LAST "❯"/"›"
+// marker line (earlier marker lines are submitted history).
 func ComposerBodyIsSuggestion(raw string) bool {
 	lines := strings.Split(raw, "\n")
+	if body, rows, ok := framedComposerBody(lines); ok {
+		// A suggestion is one dim prompt row; anything taller holds operator
+		// input (or is ambiguous), which must stay guarded.
+		return rows == 1 && bodyStartsDim(body)
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		body, ok := composerMarkerBody(lines[i])
 		if !ok {
@@ -173,3 +180,93 @@ func ComposerBodyIsSuggestion(raw string) bool {
 
 // ComposerDraft and ComposerHasDraft (guard.go) consume ComposerBodyIsSuggestion
 // directly, so every caller gets the dim check for free.
+
+// framedComposerBody returns the raw (ANSI-bearing) text after the prompt
+// marker of the composer framed by the last two border lines, the same block
+// CurrentComposerPrompt parses, and how many non-blank rows the frame holds. Claude Code 2.1.296
+// draws its prompt as ">" and labels a named session's top border
+// ("──────── <name> ─"); before this the check knew only "❯"/"›", so a
+// suggestion in such a composer read as an operator draft and every automated
+// send was refused (WO-DECK-BELL-CLEAR-01, 2026-10-12).
+func framedComposerBody(lines []string) (string, int, bool) {
+	if len(lines) > 240 {
+		lines = lines[len(lines)-240:]
+	}
+	bottom := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if IsComposerBorderLine(stripCSI(lines[i])) {
+			bottom = i
+			break
+		}
+	}
+	top := -1
+	for i := bottom - 1; i >= 0; i-- {
+		if IsComposerBorderLine(stripCSI(lines[i])) {
+			top = i
+			break
+		}
+	}
+	if top < 0 {
+		return "", 0, false
+	}
+	body, found, rows := "", false, 0
+	for _, line := range lines[top+1 : bottom] {
+		if strings.TrimSpace(strings.ReplaceAll(stripCSI(line), " ", " ")) == "" {
+			continue
+		}
+		rows++
+		if !found {
+			body, found = rawPromptBody(line)
+		}
+	}
+	return body, rows, found
+}
+
+// rawPromptBody returns line after its prompt marker when the first visible
+// character (past SGR sequences and padding) is "❯", "›" or ">".
+func rawPromptBody(line string) (string, bool) {
+	for i := 0; i < len(line); {
+		if line[i] == 0x1b && i+1 < len(line) && line[i+1] == '[' {
+			j := i + 2
+			for j < len(line) && !isCSIFinal(line[j]) {
+				j++
+			}
+			if j >= len(line) {
+				return "", false
+			}
+			i = j + 1
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if isComposerSpace(r) {
+			i += size
+			continue
+		}
+		if r == '❯' || r == '›' || r == '>' {
+			return line[i+size:], true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// stripCSI removes CSI escape sequences, enough to recognise border lines.
+func stripCSI(s string) string {
+	if !strings.Contains(s, "\x1b[") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && !isCSIFinal(s[j]) {
+				j++
+			}
+			i = j + 1
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
