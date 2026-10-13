@@ -79,6 +79,8 @@ func handleSession(profile string, args []string) {
 		handleSessionRecent(profile, args[1:])
 	case "show":
 		handleSessionShow(profile, args[1:])
+	case "accept-trust":
+		handleSessionAcceptTrust(profile, args[1:])
 	case "viewers":
 		handleSessionViewers(profile, args[1:])
 	case "current":
