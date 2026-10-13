@@ -59,6 +59,7 @@ const (
 	SettingShowEmptyGroups
 	SettingShowAidaSuffix    // Patch 38 (responsive)
 	SettingShowProviderBadge // Patch 45
+	SettingWrapRows          // Patch 48
 	SettingPreviewPct
 	SettingPreviewOrientation
 	SettingShowOnlyInstalledTools
@@ -69,7 +70,7 @@ const (
 )
 
 // Total number of navigable settings.
-const settingsCount = 47 // Patch 45: +1 (show provider badge)
+const settingsCount = 48 // Patch 45: +1 (show provider badge); patch 48: +1 (wrap rows)
 
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
@@ -135,6 +136,7 @@ type SettingsPanel struct {
 	showEmptyGroups      bool
 	showAidaSuffix       bool // Patch 38 (responsive)
 	showProviderBadge    bool // Patch 45
+	wrapRows             bool // Patch 48
 	previewPct           int  // 10-90, step 5
 	previewOrientation   int  // index into previewOrientationValues
 
@@ -425,6 +427,7 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 	s.showEmptyGroups = config.Display.ShowEmptyGroups
 	s.showAidaSuffix = config.Display.ShowAidaSuffix
 	s.showProviderBadge = config.Display.ShowProviderBadge
+	s.wrapRows = config.Display.WrapRows
 	s.previewPct = config.UI.GetPreviewPct()
 	s.previewOrientation = 0
 	for i, val := range previewOrientationValues {
@@ -592,6 +595,7 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 	config.Display.ShowEmptyGroups = s.showEmptyGroups
 	config.Display.ShowAidaSuffix = s.showAidaSuffix
 	config.Display.ShowProviderBadge = s.showProviderBadge
+	config.Display.WrapRows = s.wrapRows
 	config.UI.PreviewPct = s.previewPct
 	if s.previewOrientation >= 0 && s.previewOrientation < len(previewOrientationValues) {
 		config.UI.PreviewOrientation = previewOrientationValues[s.previewOrientation]
@@ -961,6 +965,10 @@ func (s *SettingsPanel) toggleValue() bool {
 
 	case SettingShowProviderBadge: // Patch 45
 		s.showProviderBadge = !s.showProviderBadge
+		return true
+
+	case SettingWrapRows: // Patch 48
+		s.wrapRows = !s.wrapRows
 		return true
 
 	case SettingEmbeddedTerminal:
@@ -1401,6 +1409,12 @@ func (s *SettingsPanel) View() string {
 	}
 	content.WriteString("  " + labelStyle.Render(line) + "\n")
 
+	line = s.renderCheckbox("Wrap rows", s.wrapRows) + " - title on its own line, seat/age/branch below" // Patch 48
+	if s.cursor == int(SettingWrapRows) {
+		line = highlightStyle.Render(line)
+	}
+	content.WriteString("  " + labelStyle.Render(line) + "\n")
+
 	line = s.renderNumber("Preview split:", s.previewPct, "% preview")
 	if s.cursor == int(SettingPreviewPct) {
 		line = highlightStyle.Render(line)
@@ -1554,13 +1568,14 @@ func (s *SettingsPanel) View() string {
 			64, // SettingShowEmptyGroups
 			65, // SettingShowAidaSuffix (Patch 38)
 			66, // SettingShowProviderBadge (Patch 45)
-			67, // SettingPreviewPct
-			68, // SettingPreviewOrientation
-			71, // SettingShowOnlyInstalledTools (TOOL PICKER section)
-			72, // SettingVisibleTools
-			75, // SettingEmbeddedTerminal (INTERFACE section)
-			76, // SettingSidebarDensity
-			81, // SettingPrivacy (PRIVACY section)
+			67, // SettingWrapRows (Patch 48)
+			68, // SettingPreviewPct
+			69, // SettingPreviewOrientation
+			72, // SettingShowOnlyInstalledTools (TOOL PICKER section)
+			73, // SettingVisibleTools
+			76, // SettingEmbeddedTerminal (INTERFACE section)
+			77, // SettingSidebarDensity
+			82, // SettingPrivacy (PRIVACY section)
 		}
 		cursorLine := rowOf[cursorToLine[s.cursor]]
 

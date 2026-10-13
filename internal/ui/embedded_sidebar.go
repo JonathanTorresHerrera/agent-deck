@@ -150,7 +150,7 @@ func (h *Home) sidebarItemRenderHeightAtWidth(item session.Item, width int) int 
 // a pass over the whole list) and hand it in, instead of once per row.
 func (h *Home) sidebarItemRenderHeightAtWidthLines(item session.Item, width, rowLines int) int {
 	if !h.embeddedLayout {
-		return 1
+		return h.classicItemHeight(item)
 	}
 	return sidebarItemRenderHeightAtWidthDensity(item, width, rowLines)
 }
@@ -165,7 +165,14 @@ func (h *Home) sidebarItemsHeightWithLines(items []session.Item, start, end, wid
 	if !h.embeddedLayout {
 		start = max(0, start)
 		end = min(len(items), end)
-		return max(0, end-start)
+		if !h.wrapRows {
+			return max(0, end-start)
+		}
+		height := 0
+		for i := start; i < end; i++ {
+			height += h.classicItemHeight(items[i])
+		}
+		return height
 	}
 	return sidebarItemsHeightDensity(items, start, end, width, rowLines)
 }
@@ -178,7 +185,7 @@ func (h *Home) sidebarItemsHeightWithLines(items []session.Item, start, end, wid
 // advances one visual page rather than two or three.
 func (h *Home) pageStepItems(lines, dir int) int {
 	lines = max(1, lines)
-	if !h.embeddedLayout || dir == 0 {
+	if (!h.embeddedLayout && !h.wrapRows) || dir == 0 {
 		return lines
 	}
 	_, sidebarWidth := h.sidebarLineBudget()
@@ -189,7 +196,7 @@ func (h *Home) pageStepItems(lines, dir int) int {
 		if dir > 0 {
 			heightIndex = i - dir
 		}
-		height := sidebarItemRenderHeightAtWidthDensity(h.flatItems[heightIndex], sidebarWidth, rowLines)
+		height := h.sidebarItemRenderHeightAtWidthLines(h.flatItems[heightIndex], sidebarWidth, rowLines)
 		if height > lines && steps > 0 {
 			break
 		}

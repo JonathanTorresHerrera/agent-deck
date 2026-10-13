@@ -686,6 +686,7 @@ type Home struct {
 	listDensity          string
 	showToolLabel        bool            // dim " claude" tool name on each row (default off)
 	showProviderBadge    bool            // Patch 45: provider letter after the status glyph
+	wrapRows             bool            // Patch 48: title on line 1, details on line 2
 	providerFilter       string          // Patch 45: show only this provider's sessions ("" = all); set by clicking a provider count
 	showInheritedAccount bool            // " [account:inherited]" badge (default off; named slots always show)
 	showEmptyGroups      bool            // keep zero-session groups in the list (default off)
@@ -22492,6 +22493,48 @@ func (h *Home) renderSessionItem(
 	if isMaestro {
 		displayTitle = "⬢ " + displayTitle
 	}
+	// Patch 48: two-line row. Everything after the title moves to line 2.
+	if h.wrapRows {
+		cachedViewers, cachedViewersKnown := inst.ViewersCached()
+		viewersBadgeText, _ := fitViewersBadge(cachedViewers, cachedViewersKnown, selected, -1)
+		rowAccount := instState.accountDisplay
+		if instState.account == "" && !h.showInheritedAccount {
+			rowAccount = accountPresentation{}
+		}
+		accountBadge := ""
+		if rowAccount.compactWidth > 0 {
+			accountStyle := DimStyle
+			if selected {
+				accountStyle = SessionStatusSelStyle
+			}
+			accountBadge = accountStyle.Render(rowAccount.compact)
+		}
+		if worktreeBadge != "" {
+			wtStyle := lipgloss.NewStyle().Foreground(ColorCyan)
+			if selected {
+				wtStyle = SessionStatusSelStyle
+			}
+			worktreeBadge = wtStyle.Render(" [" + cellTruncate(inst.WorktreeBranch, wrappedBranchMax, "…") + "]")
+		}
+		subtitle := ""
+		if selected || h.showPaneTitles {
+			subtitle = paneSubtitle
+		}
+		h.renderWrappedSessionRow(b, wrappedSessionRow{
+			item: item, selected: selected, listWidth: listWidth,
+			line1Prefix: strings.Repeat(" ", leftGutterWidth) + baseIndent + selectionPrefix +
+				treeStyle.Render(treeConnector) + windowChevron + status + " ",
+			statusWidth: cellWidth(status),
+			title:       displayTitle,
+			titleStyle:  titleStyle,
+			details: []string{accountBadge, timestampBadge, tool, maestroBadge, yoloBadge,
+				worktreeBadge, sandboxBadge, multiRepoBadge, sshBadge, agentBadge,
+				viewersBadgeText, aidaBadge},
+			subtitle: subtitle,
+		})
+		return
+	}
+
 	// Include the stored slot in the existing badge/title cell budget. Normal
 	// titles need the same reservation as auto-names so the badge stays visible.
 	reserved := leftGutterWidth + cellWidth(baseIndent) + cellWidth(selectionPrefix) +

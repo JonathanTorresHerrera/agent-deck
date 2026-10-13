@@ -126,6 +126,8 @@ func MergePanelConfigOntoDisk(panel *UserConfig) (*UserConfig, error) {
 	merged.Display.ShowAidaSuffix = panel.Display.ShowAidaSuffix
 	// Patch 45: provider badge toggle (panel-managed, so it must be copied).
 	merged.Display.ShowProviderBadge = panel.Display.ShowProviderBadge
+	// Patch 48: two-line rows toggle (panel-managed).
+	merged.Display.WrapRows = panel.Display.WrapRows
 	// Patch 38 (responsive): [preview] collapsed_sections is NOT panel-managed.
 	// It is written straight to disk by the TUI (persistCollapsedSections), and
 	// merged starts from the on-disk config, so the disk value survives a panel

@@ -3874,6 +3874,11 @@ type DisplaySettings struct {
 	// provider counts on the filter bar double as its legend. Default: false.
 	ShowProviderBadge bool `toml:"show_provider_badge,omitempty"`
 
+	// WrapRows (patch 48) draws each session on two lines in the classic
+	// list: the title alone on the first, its seat, age, branch and other
+	// badges on the second. Default: false (one line per session).
+	WrapRows bool `toml:"wrap_rows,omitempty"`
+
 	// ShowAidaSuffix shows the literal " (Aida)" suffix that sessions launched
 	// by Aida via agent-deck-mcp carry on their title. Default: false (hidden
 	// in the SESSIONS list rows only; the stored title is never modified).
