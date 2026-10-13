@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -763,6 +764,10 @@ func TestCrossHarnessPlanCommand_CarriesTargetIdentity(t *testing.T) {
 				t.Errorf("target block carries the SOURCE identity:\n%s", block)
 			}
 			if tc.target == "codex" {
+				notify := fmt.Sprintf(`notify=["env",%q,"agent-deck","codex-notify"]`, "AGENTDECK_INSTANCE_ID="+target.ID)
+				if !strings.Contains(command, shellescape.Quote(notify)) {
+					t.Errorf("Codex notify is not bound to target %q:\n%s", target.ID, command)
+				}
 				got := tomlRoundTrip(t, args[1])
 				if !strings.Contains(got, "- session id: "+plan.Target.InstanceID) {
 					t.Errorf("codex override does not decode to the target block:\n%s", got)
