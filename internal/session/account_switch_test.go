@@ -2,9 +2,13 @@ package session
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 const twoAccountConfig = `
@@ -42,6 +46,85 @@ func TestSwitchAccountRejectsUnknownSlot(t *testing.T) {
 	if inst.Account != "" {
 		t.Errorf("account field must be untouched, got %q", inst.Account)
 	}
+}
+
+// Clearing a named slot must carry the exact Claude conversation into the
+// inherited/default home. A plain account-field edit used to restart with an
+// empty conversation under the same session ID.
+func TestSwitchAccountNamedToDefaultPreservesConversation(t *testing.T) {
+	home := withTempAgentDeckHome(t, twoAccountConfig)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	cfg, err := LoadUserConfig()
+	require.NoError(t, err)
+	project := filepath.Join(home, "project")
+	const sid = "11111111-2222-3333-4444-555555555555"
+	source := writeAccountTranscript(t, home, "work", project, sid,
+		`{"sessionId":"`+sid+`","type":"user","timestamp":"2026-10-12T13:00:00.000Z","message":"original context"}`+"\n")
+	sourceSidecar := filepath.Join(filepath.Dir(source), sid)
+	require.NoError(t, os.MkdirAll(sourceSidecar, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceSidecar, "context.txt"), []byte("companion context"), 0o600))
+
+	inst := &Instance{ID: "named-to-default", Title: "source", ProjectPath: project, Tool: "claude", Command: "claude", Account: "work", ClaudeSessionID: sid, Status: StatusStopped, CreatedAt: time.Now()}
+	preview := PreviewSwitch(cfg, inst, SwitchPreviewTarget{Harness: "claude", Account: ""})
+	require.Nil(t, preview.Refusal)
+	require.Equal(t, filepath.Join(home, ".claude"), preview.TargetAccountDir)
+
+	oldRunning, oldStop, oldStart := nativeSwitchRunning, nativeSwitchStop, nativeSwitchStart
+	nativeSwitchRunning = func(*Instance) bool { return false }
+	nativeSwitchStop = func(*Instance) error { return nil }
+	nativeSwitchStart = func(*Instance) error { return nil }
+	t.Cleanup(func() { nativeSwitchRunning, nativeSwitchStop, nativeSwitchStart = oldRunning, oldStop, oldStart })
+	result, err := SwitchAccount(cfg, inst, "", AccountSwitchOptions{NoRestart: true})
+	require.NoError(t, err)
+	require.Equal(t, "", inst.Account)
+	require.Equal(t, "work", result.OldAccount)
+	require.Equal(t, "", result.NewAccount)
+	dest := filepath.Join(home, ".claude", "projects", ConvertToClaudeDirName(project), sid+".jsonl")
+	sourceBytes, err := os.ReadFile(source)
+	require.NoError(t, err)
+	destBytes, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	require.Equal(t, sourceBytes, destBytes)
+	sidecar, err := os.ReadFile(filepath.Join(filepath.Dir(dest), sid, "context.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "companion context", string(sidecar))
+}
+
+func TestSwitchAccountCodexNamedToDefaultPreservesRollout(t *testing.T) {
+	home := withTempAgentDeckHome(t, `
+[profiles.work.codex]
+config_dir = "~/.codex-work"
+`)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("CODEX_HOME", "")
+	cfg, err := LoadUserConfig()
+	require.NoError(t, err)
+	const sid = "11111111-2222-3333-4444-555555555555"
+	sourceHome := filepath.Join(home, ".codex-work")
+	seedCodex155Rollout(t, sourceHome, sid, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	inst := &Instance{ID: "codex-named-to-default", Title: "source", ProjectPath: filepath.Join(home, "project"),
+		Tool: "codex", Command: "codex", Account: "work", CodexSessionID: sid, Status: StatusStopped, CreatedAt: time.Now()}
+	preview := PreviewSwitch(cfg, inst, SwitchPreviewTarget{Harness: "codex", Account: ""})
+	require.Nil(t, preview.Refusal)
+	require.Equal(t, filepath.Join(home, ".codex"), preview.TargetAccountDir)
+
+	oldRunning, oldStop, oldStart := nativeSwitchRunning, nativeSwitchStop, nativeSwitchStart
+	nativeSwitchRunning = func(*Instance) bool { return false }
+	nativeSwitchStop = func(*Instance) error { return nil }
+	nativeSwitchStart = func(*Instance) error { return nil }
+	t.Cleanup(func() { nativeSwitchRunning, nativeSwitchStop, nativeSwitchStart = oldRunning, oldStop, oldStart })
+	result, err := SwitchAccount(cfg, inst, "", AccountSwitchOptions{NoRestart: true})
+	require.NoError(t, err)
+	require.Equal(t, "", inst.Account)
+	require.Equal(t, "work", result.OldAccount)
+	require.Equal(t, "", result.NewAccount)
+	sourcePath := codexRolloutPathInHome(sid, sourceHome)
+	destPath := codexRolloutPathInHome(sid, filepath.Join(home, ".codex"))
+	sourceBytes, err := os.ReadFile(sourcePath)
+	require.NoError(t, err)
+	destBytes, err := os.ReadFile(destPath)
+	require.NoError(t, err)
+	require.Equal(t, sourceBytes, destBytes)
 }
 
 // Tools without an account-switch executor must still be refused. Codex is

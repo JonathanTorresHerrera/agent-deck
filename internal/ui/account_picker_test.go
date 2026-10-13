@@ -355,12 +355,10 @@ func TestEditSessionDialogCommitRoutesAccountThroughSwitch(t *testing.T) {
 	}
 }
 
-// Clearing the slot back to "inherit" is a supported mutation everywhere else
-// (SetField treats "" as "drop the override"), so the TUI must be able to undo
-// an account assignment. It is NOT a switch: there is no target config dir to
-// migrate into, and routing it through SwitchAccount would fail with
-// "unknown account slot".
-func TestEditSessionDialogClearingAccountIsNotASwitch(t *testing.T) {
+// Clearing a named slot to "inherit" must use the migration flow: the
+// inherited/default config dir is a real destination, and a plain field write
+// would restart a running session with an empty conversation there.
+func TestEditSessionDialogClearingAccountConfirmsNativeSwitch(t *testing.T) {
 	withAccountsConfig(t, "work", "personal")
 
 	home := NewHome()
@@ -382,13 +380,11 @@ func TestEditSessionDialogClearingAccountIsNotASwitch(t *testing.T) {
 	home.editSessionDialog.Update(tea.KeyMsg{Type: tea.KeyRight}) // wrap to "" (inherit)
 
 	_, cmd := home.handleEditSessionDialogKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if inst.Account != "" {
-		t.Fatalf("account = %q after clearing to inherit, want empty", inst.Account)
+	if cmd != nil || !home.confirmDialog.IsVisible() || home.confirmDialog.GetConfirmType() != ConfirmSwitchAccount {
+		t.Fatal("clearing the account must ask before the native switch")
 	}
-	if cmd != nil {
-		if _, isSwitch := cmd().(accountSwitchedMsg); isSwitch {
-			t.Error("clearing the slot must not run the switch flow — there is no target dir to migrate into")
-		}
+	if home.confirmDialog.TargetAccount() != "" || inst.Account != "work" {
+		t.Fatal("the confirmation must target default without changing the source yet")
 	}
 }
 

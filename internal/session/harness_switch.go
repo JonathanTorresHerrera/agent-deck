@@ -260,9 +260,6 @@ func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOpt
 }
 
 func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPreview, opts HarnessSwitchOptions, journalPath string, journal *switchJournal) (*HarnessSwitchResult, error) {
-	if preview.TargetAccount == "" {
-		return nil, fmt.Errorf("Claude native resume requires a named target account; choose a configured account")
-	}
 	if preview.TargetAccount == inst.Account {
 		return nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: inst.Tool, NewTool: inst.Tool, OldAccount: inst.Account, NewAccount: inst.Account, Continuity: "native", Conversation: "no-op: requested account is already active; no restart or native readiness assertion was made", Committed: true, DestinationReady: false}, identityForInstance(inst), identityForInstance(inst)), nil
 	}
@@ -273,9 +270,17 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration is unavailable; target account cannot be validated")
 	}
-	targetDir := cfg.GetProfileClaudeConfigDir(preview.TargetAccount)
+	targetDir := preview.TargetAccountDir
+	if preview.TargetAccount == "" {
+		// Resolve the same inherited config dir the restarted instance will use.
+		// This may come from conductor, group, environment, profile, or global
+		// configuration, so a fixed ~/.claude fallback is unsafe.
+		target := *inst
+		target.Account = ""
+		targetDir = GetClaudeConfigDirForInstance(&target)
+	}
 	if targetDir == "" {
-		return nil, fmt.Errorf("target Claude account %q is not configured", preview.TargetAccount)
+		return nil, fmt.Errorf("target Claude account %q has no resolved config dir", preview.TargetAccount)
 	}
 
 	j := journal
@@ -448,12 +453,17 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 }
 
 func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPreview, opts HarnessSwitchOptions, journalPath string, journal *switchJournal) (*HarnessSwitchResult, error) {
-	if cfg == nil || preview.TargetAccount == "" {
-		return nil, fmt.Errorf("Codex native resume requires a configured target account")
+	if cfg == nil {
+		return nil, fmt.Errorf("configuration is unavailable; target Codex account cannot be validated")
 	}
-	targetHome := cfg.GetProfileCodexConfigDir(preview.TargetAccount)
+	targetHome := preview.TargetAccountDir
+	if preview.TargetAccount == "" {
+		target := *inst
+		target.Account = ""
+		targetHome = CodexHomeDirForInstance(&target)
+	}
 	if targetHome == "" {
-		return nil, fmt.Errorf("target Codex account %q is not configured", preview.TargetAccount)
+		return nil, fmt.Errorf("target Codex account %q has no resolved home", preview.TargetAccount)
 	}
 	if preview.TargetAccount == inst.Account {
 		return nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: inst.Tool, NewTool: inst.Tool, OldAccount: inst.Account, NewAccount: inst.Account, Continuity: "native", Conversation: "no-op: requested account is already active; no restart or native readiness assertion was made", Committed: true, DestinationReady: false}, identityForInstance(inst), identityForInstance(inst)), nil

@@ -14509,16 +14509,14 @@ func (h *Home) handleEditSessionDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// conversation. It is pulled out here and handed to
 		// session.SwitchAccount (the same flow as `agent-deck session
 		// switch-account`) once the ordinary field writes are persisted.
-		// Clearing the slot back to "inherit" is NOT a switch: there is no
-		// target config dir to migrate into, and SetField already treats an
-		// empty value as "drop the override" (back to the conductor/group/env
-		// chain). Only a named target goes through the switch flow; the empty
-		// value stays in the ordinary field loop below.
+		// The inherited/default slot also resolves to a concrete config dir.
+		// It must take this path so clearing a named slot does not restart with
+		// an empty conversation in that directory.
 		accountSwitch := ""
 		switchHarness := ""
 		switchAccount := false
 		for _, c := range changes {
-			if c.Field == session.FieldAccount && strings.TrimSpace(c.Value) != "" {
+			if c.Field == session.FieldAccount {
 				accountSwitch, switchAccount = c.Value, true
 			}
 			if c.Field == session.FieldTool && strings.TrimSpace(c.Value) != "" && c.Value != inst.Tool {

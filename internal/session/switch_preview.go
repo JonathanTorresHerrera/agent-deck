@@ -280,6 +280,18 @@ func PreviewSwitchWithMaxBytesAndSnapshot(cfg *UserConfig, inst *Instance, targe
 
 	// Resolve target account status and config dir (tool-specific).
 	targetDir, targetStat := resolveTargetAccountInfo(cfg, targetHarness, targetAccount)
+	if targetAccount == "" && IsClaudeCompatible(targetHarness) {
+		target := *inst
+		target.Account = ""
+		targetDir = GetClaudeConfigDirForInstance(&target)
+	} else if targetAccount == "" && IsCodexCompatible(targetHarness) {
+		target := *inst
+		target.Account = ""
+		if !IsCodexCompatible(inst.Tool) {
+			target.Tool, target.Command = targetHarness, targetHarness
+		}
+		targetDir = CodexHomeDirForInstance(&target)
+	}
 	preview.TargetAccountDir = targetDir
 	preview.TargetAccountStat = targetStat
 
