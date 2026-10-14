@@ -4,6 +4,10 @@
   "title": "session.stop input",
   "type": "object",
   "properties": {
+    "force": {
+      "description": "Skip agent exit and kill immediately",
+      "type": "boolean"
+    },
     "profile": {
       "description": "Profile whose store holds the session",
       "type": "string"
@@ -11,6 +15,10 @@
     "session": {
       "description": "Session id, id prefix, title or path",
       "type": "string"
+    },
+    "timeout_seconds": {
+      "description": "Graceful exit timeout in seconds (default 20)",
+      "type": "integer"
     }
   },
   "required": [

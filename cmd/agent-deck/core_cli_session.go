@@ -134,11 +134,14 @@ func cliSessionStop(profile string, args []string) {
 	fs.Var(&jsonOutput, "json", "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
+	force := fs.Bool("force", false, "Kill immediately without asking the agent to exit")
+	hard := fs.Bool("hard", false, "Alias for --force")
+	timeout := fs.Int("timeout", 20, "Seconds to wait for agent exit before killing")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck session stop <id|title> [options]")
 		fmt.Println()
-		fmt.Println("Stop/kill a session's process (tmux session remains).")
+		fmt.Println("Ask the agent to exit, then stop its tmux scope.")
 		fmt.Println()
 		fmt.Println("Options:")
 		fs.PrintDefaults()
@@ -150,7 +153,7 @@ func cliSessionStop(profile string, args []string) {
 
 	out := NewCLIOutput(jsonOutput.enabled(), *quiet || *quietShort)
 
-	res := runCore(profile, &jsonOutput, core.IDSessionStop, core.SessionStopIn{Profile: profile, Session: fs.Arg(0)}, func(ev core.Event) {
+	res := runCore(profile, &jsonOutput, core.IDSessionStop, core.SessionStopIn{Profile: profile, Session: fs.Arg(0), Force: *force || *hard, TimeoutSeconds: *timeout}, func(ev core.Event) {
 		if ev.Kind == core.EventQueueDrainFailed {
 			fmt.Fprintf(os.Stderr, "queue drain failed to start %s: %v\n", ev.Title, ev.Err)
 		}
@@ -167,6 +170,7 @@ func cliSessionStop(profile string, args []string) {
 			"success": true,
 			"id":      stopped.ID,
 			"title":   stopped.Title,
+			"outcome": stopped.Outcome,
 		}
 		if stopped.Drained != "" {
 			result["drained"] = stopped.Drained

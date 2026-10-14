@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/health"
 	"github.com/asheshgoplani/agent-deck/internal/session"
@@ -10,16 +11,19 @@ import (
 
 // SessionStopIn is the input of session.stop.
 type SessionStopIn struct {
-	Profile string `json:"profile" doc:"Profile whose store holds the session"`
-	Session string `json:"session" doc:"Session id, id prefix, title or path"`
+	Profile        string `json:"profile" doc:"Profile whose store holds the session"`
+	Session        string `json:"session" doc:"Session id, id prefix, title or path"`
+	Force          bool   `json:"force,omitempty" doc:"Skip agent exit and kill immediately"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" doc:"Graceful exit timeout in seconds (default 20)"`
 }
 
 // SessionStopOut is the output of session.stop.
 type SessionStopOut struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	Drained      string `json:"drained,omitempty" doc:"Id of the queued session started in the freed slot"`
-	DrainedTitle string `json:"drained_title,omitempty"`
+	ID           string              `json:"id"`
+	Title        string              `json:"title"`
+	Drained      string              `json:"drained,omitempty" doc:"Id of the queued session started in the freed slot"`
+	DrainedTitle string              `json:"drained_title,omitempty"`
+	Outcome      session.StopOutcome `json:"outcome,omitempty"`
 }
 
 func (deps Deps) sessionStop(ctx context.Context, in SessionStopIn) (SessionStopOut, error) {
@@ -31,14 +35,11 @@ func (deps Deps) sessionStop(ctx context.Context, in SessionStopIn) (SessionStop
 	if err != nil {
 		return SessionStopOut{}, err
 	}
-	if !inst.Exists() {
-		return SessionStopOut{}, Errorf(CodeNotRunning, "session '%s' is not running", inst.Title)
-	}
-
 	// Capture tool conversation ids before Kill: show-environment fails on
 	// a dead tmux session.
 	inst.SyncSessionIDsFromTmux()
-	if err := inst.Kill(); err != nil {
+	outcome, err := inst.StopWithOptions(session.StopOptions{Force: in.Force, Timeout: time.Duration(in.TimeoutSeconds) * time.Second})
+	if err != nil {
 		return SessionStopOut{}, &Error{Code: CodeInvalid, Message: fmt.Sprintf("failed to stop session: %v", err), Cause: err}
 	}
 
@@ -47,7 +48,7 @@ func (deps Deps) sessionStop(ctx context.Context, in SessionStopIn) (SessionStop
 		return SessionStopOut{}, err
 	}
 
-	out := SessionStopOut{ID: inst.ID, Title: inst.Title}
+	out := SessionStopOut{ID: inst.ID, Title: inst.Title, Outcome: outcome}
 	if drained != nil {
 		out.Drained = drained.ID
 		out.DrainedTitle = drained.Title
