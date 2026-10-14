@@ -321,14 +321,59 @@ var codexAuthBannerPatterns = []string{
 	"not logged in",
 }
 
+// codexInvalidRequestBannerPatterns: the API rejected the turn outright with a
+// 400 invalid_request_error. The turn ends at once and Codex redraws an idle
+// composer, so the session looks ready while every turn will fail the same way.
+// Seen on 2026-10-13 for a model a ChatGPT-login account cannot use; the error
+// text is CAPTURED from the rollout's task_complete.error.message, the "■"
+// rendering is INFERRED from Codex's error cell (the usage-limit shape above).
+//
+//	■ {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.5-codex' model is not supported when using Codex with a ChatGPT account."}}
+var codexInvalidRequestBannerPatterns = []string{
+	`"status":400`,
+	"invalid_request_error",
+	"is not supported when using codex",
+}
+
+// codexBannerMessageRe pulls the innermost "message" out of the JSON error the
+// banner prints (the outer object carries none, so the last match is it).
+var codexBannerMessageRe = regexp.MustCompile(`"message"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// codexUnsupportedModelRe names the model in the rejection text.
+var codexUnsupportedModelRe = regexp.MustCompile(`(?i)the '([^']+)' model is not supported`)
+
 // codexRetryAtRe pulls the retry time out of the usage-limit banner text.
 var codexRetryAtRe = regexp.MustCompile(`(?i)try again at\s+([^.]+)`)
 
 // Codex banner kinds returned by scanCodexErrorBanner.
 const (
-	codexBannerUsageLimit = "usage-limit"
-	codexBannerAuth       = "auth"
+	codexBannerUsageLimit     = "usage-limit"
+	codexBannerAuth           = "auth"
+	codexBannerInvalidRequest = "invalid-request"
 )
+
+// CodexRejectionDetail renders a Codex API rejection (a "■" banner, or the raw
+// error text a rollout's task_complete carries): "model <name>: <message>"
+// when the rejection names a model, else the message alone.
+func CodexRejectionDetail(banner string) string {
+	msg := strings.TrimSpace(strings.TrimPrefix(banner, codexErrorBannerPrefix))
+	if m := codexBannerMessageRe.FindAllStringSubmatch(banner, -1); len(m) > 0 {
+		msg = strings.ReplaceAll(m[len(m)-1][1], `\"`, `"`)
+	}
+	if model := CodexUnsupportedModel(msg); model != "" {
+		return "model " + model + ": " + msg
+	}
+	return msg
+}
+
+// CodexUnsupportedModel returns the model a Codex 400 rejection names ("The
+// 'gpt-5.5-codex' model is not supported ..."), or "".
+func CodexUnsupportedModel(text string) string {
+	if m := codexUnsupportedModelRe.FindStringSubmatch(text); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 // codexComposerPlaceholder is the empty composer's placeholder text.
 const codexComposerPlaceholder = "Ask Codex to do anything"
@@ -419,6 +464,18 @@ func scanCodexErrorBanner(content string) (kind, detail string) {
 			return codexBannerUsageLimit, ""
 		case containsAny(lower, codexAuthBannerPatterns):
 			return codexBannerAuth, ""
+		}
+		// The JSON wraps across rows, so the invalid-request match reads the
+		// whole banner, not just its first line.
+		banner := line
+		for j := i + 1; j < len(recent); j++ {
+			if strings.HasPrefix(recent[j].text, codexErrorBannerPrefix) || strings.HasPrefix(recent[j].text, codexPromptGlyph) {
+				break
+			}
+			banner += " " + recent[j].text
+		}
+		if containsAny(strings.ToLower(banner), codexInvalidRequestBannerPatterns) {
+			return codexBannerInvalidRequest, CodexRejectionDetail(banner)
 		}
 	}
 	return "", ""

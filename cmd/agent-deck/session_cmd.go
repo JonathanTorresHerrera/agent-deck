@@ -79,6 +79,8 @@ func handleSession(profile string, args []string) {
 		handleSessionRecent(profile, args[1:])
 	case "show":
 		handleSessionShow(profile, args[1:])
+	case "accept-trust":
+		handleSessionAcceptTrust(profile, args[1:])
 	case "viewers":
 		handleSessionViewers(profile, args[1:])
 	case "current":
@@ -1945,6 +1947,12 @@ func handleSessionShow(profile string, args []string) {
 	}
 	if detail := inst.SubstateDetail(); detail != "" {
 		jsonData["substate_detail"] = detail
+	}
+	// The newest Codex turn's API rejection, from the rollout: the evidence a
+	// launcher checks after the first message, since the pane is back at an
+	// idle composer a moment after the rejection. Omitted when there is none.
+	if turnErr := inst.CodexLastTurnError(); turnErr != "" {
+		jsonData["last_turn_error"] = turnErr
 	}
 	modelInfo := inst.LaunchModelInfo()
 	addModelInfoJSON(jsonData, modelInfo)

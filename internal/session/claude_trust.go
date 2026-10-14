@@ -69,6 +69,27 @@ func PreAcceptClaudeTrust(claudeJSONPath, parentDir string) error {
 	return nil
 }
 
+// ClaudeTrustConfigPaths lists the .claude.json files whose trust entry a
+// launch of inst must seed: the root ~/.claude.json, plus the instance's own
+// config dir when one is set explicitly (a seat such as claude-2, a conductor
+// or a group). Claude reads trust from $CLAUDE_CONFIG_DIR/.claude.json when
+// that is set, so seeding only the root left every seat launch on the prompt.
+func ClaudeTrustConfigPaths(inst *Instance) []string {
+	paths := []string{}
+	if root := GetUserMCPRootPath(); root != "" {
+		paths = append(paths, root)
+	}
+	if inst != nil && IsClaudeConfigDirExplicitForInstance(inst) {
+		if dir := GetClaudeConfigDirForInstance(inst); dir != "" {
+			seat := filepath.Join(dir, ".claude.json")
+			if len(paths) == 0 || filepath.Clean(seat) != filepath.Clean(paths[0]) {
+				paths = append(paths, seat)
+			}
+		}
+	}
+	return paths
+}
+
 // WriteMultiRepoParentClaudeMD writes a .claude/CLAUDE.md to parentDir telling
 // Claude that this is a multi-repo session, which subdirectories contain real
 // repos, how to scope commands, and @path imports for each child project's

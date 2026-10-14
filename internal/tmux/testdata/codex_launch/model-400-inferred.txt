@@ -1,0 +1,17 @@
+
+  >_ OpenAI Codex (v0.161.0)
+     /work/hub/.worktrees/feature-tabs
+  permissions: YOLO mode
+
+
+› [agent-deck-mcp] from=aida tool=deck_launch_session reply_to=bus:aida/#aida-ops msg=ea80089fb152
+  WO-OPS-RUNNER-QUEUE-REORDER-01 (from Aida, for JT)
+
+■ {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.5-codex' model is not supported
+when using Codex with a ChatGPT account."}}
+
+
+› Ask Codex to do anything
+
+  gpt-5.5-codex high · /work/hub/.worktrees/feature-tabs
+  ? for shortcuts                                                                                               ⚠ 1 warning · f2 to view
