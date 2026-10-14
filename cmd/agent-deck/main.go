@@ -449,6 +449,9 @@ func main() {
 		case "status":
 			handleStatus(profile, args[1:])
 			return
+		case "reconcile":
+			handleReconcile(args[1:])
+			return
 		case "profile":
 			handleProfile(args[1:])
 			return
@@ -3242,6 +3245,9 @@ func handleRemove(profile string, args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
+	force := fs.Bool("force", false, "Kill immediately without asking the agent to exit")
+	hard := fs.Bool("hard", false, "Alias for --force")
+	timeout := fs.Int("timeout", 20, "Seconds to wait for agent exit before killing")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck remove <id|title>")
@@ -3301,10 +3307,11 @@ func handleRemove(profile string, args []string) {
 	// Uses the synchronous variant so the SIGTERM→SIGKILL escalation finishes
 	// before this short-lived CLI exits — otherwise SIGHUP-immune claude
 	// processes survive as orphans (issue #59, v1.7.68).
-	if err := inst.KillAndWait(); err != nil {
+	stopOutcome, stopErr := inst.StopWithOptions(session.StopOptions{Force: *force || *hard, Timeout: time.Duration(*timeout) * time.Second})
+	if stopErr != nil {
 		// Only warn if the session actually existed (ignore "not found" errors)
 		if inst.Exists() && !*jsonOutput {
-			fmt.Printf("Warning: failed to kill tmux session: %v\n", err)
+			fmt.Printf("Warning: failed to kill tmux session: %v\n", stopErr)
 			fmt.Println("Session removed from Agent Deck but may still be running in tmux")
 		}
 	}
@@ -3379,6 +3386,7 @@ func handleRemove(profile string, args []string) {
 			"id":      removedID,
 			"title":   removedTitle,
 			"removed": true,
+			"outcome": stopOutcome,
 			"profile": storage.Profile(),
 		},
 	)
@@ -4450,6 +4458,7 @@ func printHelp() {
 	fmt.Println("  remove, rm       Remove a session")
 	fmt.Println("  rename, mv       Rename a session")
 	fmt.Println("  status           Show session status summary")
+	fmt.Println("  reconcile        Inspect stale sessions and orphan tmux scopes (dry-run by default)")
 	fmt.Println("  session          Manage session lifecycle")
 	fmt.Println("  fleet            Detect and recover from a fleet-wide session death")
 	fmt.Println("  mcp              Manage MCP servers")

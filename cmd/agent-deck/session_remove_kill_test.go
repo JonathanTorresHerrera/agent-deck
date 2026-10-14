@@ -10,8 +10,8 @@
 //
 // These tests lock in two properties of the fix:
 //
-//  1. handleSessionRemove unconditionally invokes the Instance kill path
-//     (inst.Kill or inst.KillAndWait) — NOT gated on --prune-worktree.
+//  1. handleSessionRemove unconditionally invokes the Instance teardown path
+//     (inst.StopWithOptions) — NOT gated on --prune-worktree.
 //  2. The bulk --all-errored path does the same.
 //
 // Both assertions are structural (source-level) because a real-tmux
@@ -60,7 +60,7 @@ func extractFuncBody(src, fnName string) string {
 	return ""
 }
 
-// The single-session remove handler MUST call inst.Kill (or KillAndWait)
+// The single-session remove handler MUST call inst.StopWithOptions
 // in its mainline — before issue #59 this was only reachable via the
 // --prune-worktree side branch, so `session remove --force` silently
 // leaked the tmux scope and every child process in it.
@@ -75,10 +75,10 @@ func TestSessionRemove_HandlerCallsKillUnconditionally(t *testing.T) {
 	}
 	// Must call the kill path. `.Kill(` and `.KillAndWait(` both satisfy
 	// the fix; either is acceptable.
-	killRe := regexp.MustCompile(`inst\.(Kill|KillAndWait)\s*\(`)
+	killRe := regexp.MustCompile(`inst\.StopWithOptions\s*\(`)
 	if !killRe.MatchString(body) {
 		t.Errorf(
-			"handleSessionRemove must unconditionally invoke inst.Kill / inst.KillAndWait "+
+			"handleSessionRemove must unconditionally invoke inst.StopWithOptions "+
 				"(issue #59 regression guard); function body:\n%s",
 			body,
 		)
@@ -98,7 +98,7 @@ func TestSessionRemove_BulkRemoveCallsKillUnconditionally(t *testing.T) {
 	if body == "" {
 		t.Fatalf("could not extract bulkRemoveSessions body — file layout changed?")
 	}
-	killRe := regexp.MustCompile(`\b(Kill|KillAndWait)\s*\(`)
+	killRe := regexp.MustCompile(`\bStopWithOptions\s*\(`)
 	if !killRe.MatchString(body) {
 		t.Errorf(
 			"bulkRemoveSessions must kill each session before deleting it "+

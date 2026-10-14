@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/telemetry"
@@ -23,6 +24,8 @@ func handleSessionRemove(profile string, args []string) {
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
 	force := fs.Bool("force", false, "Remove even when the session is running/waiting/idle; with --all-errored, also include pinned sessions (destructive)")
+	hard := fs.Bool("hard", false, "Kill immediately without asking the agent to exit")
+	timeout := fs.Int("timeout", 20, "Seconds to wait for agent exit before killing")
 	allErrored := fs.Bool("all-errored", false, "Remove every unpinned session currently in the 'error' state (bulk); pinned sessions are skipped unless --force is given")
 	pruneWorktree := fs.Bool("prune-worktree", false, "Also kill the process and remove any git worktree (destructive)")
 
@@ -55,7 +58,7 @@ func handleSessionRemove(profile string, args []string) {
 	}
 
 	if *allErrored {
-		removeAllErrored(out, storage, instances, groups, *pruneWorktree, *force)
+		removeAllErrored(out, storage, instances, groups, *pruneWorktree, *force, session.StopOptions{Force: *hard, Timeout: time.Duration(*timeout) * time.Second})
 		return
 	}
 
@@ -95,7 +98,7 @@ func handleSessionRemove(profile string, args []string) {
 	//
 	// KillAndWait runs the SIGTERM→SIGKILL escalation synchronously so
 	// the kill completes before this short-lived CLI exits.
-	_ = inst.KillAndWait()
+	stopOutcome, _ := inst.StopWithOptions(session.StopOptions{Force: *hard, Timeout: time.Duration(*timeout) * time.Second})
 	inst.RecordTelemetryEnd(telemetry.EndDelete)
 
 	if *pruneWorktree {
@@ -123,6 +126,7 @@ func handleSessionRemove(profile string, args []string) {
 		"success": true,
 		"id":      inst.ID,
 		"title":   inst.Title,
+		"outcome": stopOutcome,
 	})
 }
 
@@ -143,6 +147,7 @@ func removeAllErrored(
 	groups []*session.GroupData,
 	pruneWorktree bool,
 	force bool,
+	stopOpts session.StopOptions,
 ) {
 	var doomed []*session.Instance
 	skipped := 0
@@ -159,7 +164,7 @@ func removeAllErrored(
 		doomed = append(doomed, inst)
 	}
 
-	removed := bulkRemoveSessions(out, storage, instances, groups, doomed, pruneWorktree)
+	removed := bulkRemoveSessions(out, storage, instances, groups, doomed, pruneWorktree, stopOpts)
 
 	msg := fmt.Sprintf("Removed %d errored session(s)", len(removed))
 	if skipped > 0 {
@@ -201,7 +206,12 @@ func bulkRemoveSessions(
 	groups []*session.GroupData,
 	doomed []*session.Instance,
 	pruneWorktree bool,
+	stopOptions ...session.StopOptions,
 ) []removedSessionRow {
+	stopOpts := session.StopOptions{}
+	if len(stopOptions) > 0 {
+		stopOpts = stopOptions[0]
+	}
 	doomedIDs := make(map[string]bool, len(doomed))
 	for _, inst := range doomed {
 		doomedIDs[inst.ID] = true
@@ -210,7 +220,7 @@ func bulkRemoveSessions(
 	removed := make([]removedSessionRow, 0, len(doomed))
 	removedIDs := make([]string, 0, len(doomed))
 	for _, inst := range doomed {
-		_ = inst.KillAndWait()
+		_, _ = inst.StopWithOptions(stopOpts)
 		if pruneWorktree {
 			pruneSessionWorktree(inst)
 		}

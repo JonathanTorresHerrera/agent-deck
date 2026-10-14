@@ -1,5 +1,11 @@
+  -force
+    	Kill immediately without asking the agent to exit
+  -hard
+    	Alias for --force
   -json
     	Output as JSON
   -q	Minimal output (short)
   -quiet
     	Minimal output
+  -timeout int
+    	Seconds to wait for agent exit before killing (default 20)
