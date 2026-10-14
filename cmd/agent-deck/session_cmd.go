@@ -484,11 +484,14 @@ func handleSessionStop(profile string, args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
+	force := fs.Bool("force", false, "Kill immediately without asking the agent to exit")
+	hard := fs.Bool("hard", false, "Alias for --force")
+	timeout := fs.Int("timeout", 20, "Seconds to wait for agent exit before killing")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck session stop <id|title> [options]")
 		fmt.Println()
-		fmt.Println("Stop/kill a session's process (tmux session remains).")
+		fmt.Println("Ask the agent to exit, then stop its tmux scope.")
 		fmt.Println()
 		fmt.Println("Options:")
 		fs.PrintDefaults()
@@ -521,10 +524,7 @@ func handleSessionStop(profile string, args []string) {
 	}
 
 	// Check if not running
-	if !inst.Exists() {
-		out.Error(fmt.Sprintf("session '%s' is not running", inst.Title), ErrCodeInvalidOperation)
-		os.Exit(1)
-	}
+	// Stopping an already-dead row is an idempotent reconciliation.
 
 	// Capture tool conversation IDs from tmux env before killing the session.
 	// This ensures IDs are saved to storage even if PostStartSync timed out
@@ -534,7 +534,8 @@ func handleSessionStop(profile string, args []string) {
 	adoptLiveCodexIdentity(storage, inst)
 
 	// Stop the session by killing the tmux session
-	if err := inst.Kill(); err != nil {
+	stopOutcome, err := inst.StopWithOptions(session.StopOptions{Force: *force || *hard, Timeout: time.Duration(*timeout) * time.Second})
+	if err != nil {
 		out.Error(fmt.Sprintf("failed to stop session: %v", err), ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
@@ -557,6 +558,7 @@ func handleSessionStop(profile string, args []string) {
 		"success": true,
 		"id":      inst.ID,
 		"title":   inst.Title,
+		"outcome": stopOutcome,
 	}
 	if drained != nil {
 		result["drained"] = drained.ID
@@ -579,6 +581,9 @@ func handleSessionArchive(profile string, args []string) {
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
+	force := fs.Bool("force", false, "Kill immediately without asking the agent to exit")
+	hard := fs.Bool("hard", false, "Alias for --force")
+	timeout := fs.Int("timeout", 20, "Seconds to wait for agent exit before killing")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck session archive <id|title> [options]")
@@ -629,11 +634,8 @@ func handleSessionArchive(profile string, args []string) {
 		os.Exit(1)
 	}
 
-	// Only kill a live tmux session. Killing an already-dead session returns a
-	// fatal error that would abort the archive (see idempotent-Kill history),
-	// so gate on Exists() the way handleSessionStop does. Kill() sets
-	// Status=stopped in memory only; persistArchivedCLI persists it below.
-	//
+	// Teardown also handles an already-dead pane and clears stale running
+	// status. Persist the stopped status together with the archive timestamp.
 	// Unlike handleSessionStop we deliberately do NOT SyncSessionIDsFromTmux()
 	// here: archive persists via a targeted UPDATE (to survive concurrent TUI
 	// writers), which cannot carry the whole-row tool-id fields the sync
@@ -644,18 +646,17 @@ func handleSessionArchive(profile string, args []string) {
 	// Codex is the exception: launch left its identity unpersisted, and the
 	// live process is the only evidence of it, so bind it with the targeted
 	// Codex write before the kill destroys that evidence (#2400).
-	killed := false
 	if inst.Exists() {
 		adoptLiveCodexIdentity(storage, inst)
-		if err := inst.Kill(); err != nil {
-			out.Error(fmt.Sprintf("failed to stop session: %v", err), ErrCodeInvalidOperation)
-			os.Exit(1)
-		}
-		killed = true
+	}
+	stopOutcome, err := inst.StopWithOptions(session.StopOptions{Force: *force || *hard, Timeout: time.Duration(*timeout) * time.Second})
+	if err != nil {
+		out.Error(fmt.Sprintf("failed to stop session: %v", err), ErrCodeInvalidOperation)
+		os.Exit(1)
 	}
 
 	inst.ArchivedAt = time.Now().UTC()
-	if err := persistArchivedCLI(storage, inst, killed); err != nil {
+	if err := persistArchivedCLI(storage, inst, true); err != nil {
 		out.Error(fmt.Sprintf("failed to persist archive: %v", err), ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
@@ -665,6 +666,7 @@ func handleSessionArchive(profile string, args []string) {
 		"id":       inst.ID,
 		"title":    inst.Title,
 		"archived": true,
+		"outcome":  stopOutcome,
 	})
 }
 

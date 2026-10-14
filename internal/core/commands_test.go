@@ -124,12 +124,17 @@ func TestSessionStartYoloFailureIsInvalidAndStartsNothing(t *testing.T) {
 	wantCode(t, res.Err, CodeInvalid, "yolo unsupported")
 }
 
-func TestSessionStopNotRunning(t *testing.T) {
+func TestSessionStopAlreadyDead(t *testing.T) {
 	const profile = "_core_stop_idle"
 	seedStore(t, profile, nil, session.NewInstance("alpha", t.TempDir()))
 	res := testRegistry(t, Deps{}).Run(context.Background(), IDSessionStop, SessionStopIn{Profile: profile, Session: "alpha"})
-	wantCode(t, res.Err, CodeNotRunning, "session 'alpha' is not running")
-	res.Finish() // nothing deferred on failure
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if got := res.Out.(SessionStopOut).Outcome; got != session.StopAlreadyDead {
+		t.Fatalf("outcome=%s", got)
+	}
+	res.Finish()
 }
 
 func TestSessionStopUnknownSession(t *testing.T) {

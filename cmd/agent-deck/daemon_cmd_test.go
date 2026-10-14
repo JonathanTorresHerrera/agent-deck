@@ -161,7 +161,7 @@ func TestDaemonEnvelopesMatchArgv(t *testing.T) {
 		{name: "list, nothing running", a: step{argv("list"), core.IDSessionList, listIn, true}},
 		{name: "group list", a: step{argv("group", "list"), core.IDGroupList, core.GroupListIn{}, true}},
 		{name: "start unknown", a: step{argv("session", "start", "nosuch"), core.IDSessionStart, core.SessionStartIn{Session: "nosuch"}, false}},
-		{name: "stop not running", a: step{argv("session", "stop", "alpha"), core.IDSessionStop, stop, false}},
+		{name: "stop already dead", a: step{argv("session", "stop", "alpha"), core.IDSessionStop, stop, true}},
 		{name: "restart missing arg", a: step{argv("session", "restart"), core.IDSessionRestart, core.SessionRestartIn{}, false}},
 		{name: "restart unknown", a: step{argv("session", "restart", "nosuch"), core.IDSessionRestart, core.SessionRestartIn{Session: "nosuch"}, false}},
 		{
