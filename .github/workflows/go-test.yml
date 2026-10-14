@@ -133,6 +133,23 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Build reviewed CLI artifact
+        if: matrix.shard.name == 'cmd-a'
+        run: |
+          mkdir -p build
+          go build -trimpath -o build/agent-deck ./cmd/agent-deck
+          sha256sum build/agent-deck > build/agent-deck.sha256
+          git rev-parse HEAD > build/source-commit
+          git rev-parse HEAD^{tree} > build/source-tree
+
+      - name: Upload reviewed CLI artifact
+        if: matrix.shard.name == 'cmd-a'
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-deck-linux-amd64-${{ github.sha }}
+          path: build/
+          retention-days: 7
+
       # tmux + zoxide back the session and quick-open picker tests that the
       # suite exercises for real; mirror release.yml.
       - name: Install tmux and zoxide
