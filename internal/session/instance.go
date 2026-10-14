@@ -88,6 +88,7 @@ const (
 	SubstateInteractiveMenu   = tmux.SubstateInteractiveMenu
 	SubstateBackgroundWork    = tmux.SubstateBackgroundWork
 	SubstateModelUnavailable  = tmux.SubstateModelUnavailable
+	SubstateModelUnsupported  = tmux.SubstateModelUnsupported
 	SubstateAuth401           = tmux.SubstateAuth401
 	SubstateUsageLimit        = tmux.SubstateUsageLimit
 	SubstateUnknownExit       = tmux.SubstateUnknownExit
@@ -8209,6 +8210,9 @@ type codexRolloutRecord struct {
 		Type             string  `json:"type"`
 		TurnID           string  `json:"turn_id"`
 		LastAgentMessage *string `json:"last_agent_message"`
+		Error            *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	} `json:"payload"`
 }
 

@@ -130,7 +130,7 @@ var completionTree = []completionNode{
 		name: "session",
 		subs: []string{
 			"start", "stop", "remove", "cleanup", "prune", "archive", "unarchive",
-			"restart", "revive", "fork", "handoff", "attach", "focus", "show",
+			"restart", "revive", "fork", "handoff", "attach", "focus", "show", "accept-trust",
 			"viewers", "current", "primer", "set-parent", "unset-parent", "update", "set-transition-notify",
 			"set-title-lock", "set", "switch-account", "move", "send", "approve",
 			"send-keys", "output", "children", "search",
@@ -147,6 +147,7 @@ var completionTree = []completionNode{
 			"attach":                {argSession},
 			"focus":                 {argSession},
 			"show":                  {argSession},
+			"accept-trust":          {argSession},
 			"viewers":               {argSession},
 			"primer":                {argSession},
 			"set-parent":            {argSession, argSession},
