@@ -1,0 +1,14 @@
+› Continue
+
+• Explored
+  └ Read data.ts, App.tsx, Runners.tsx
+    + Show details
+
+◦ Working (10m 31s • esc to interrupt)
+  └ Tip: Use /theme to choose a syntax highlighting theme.
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol medium · /work/hub · Continue
+  ? for shortcuts                                                                                                              ⚠ 3 warnings · f2 to view
