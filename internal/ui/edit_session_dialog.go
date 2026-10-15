@@ -103,9 +103,13 @@ func (d *EditSessionDialog) Show(inst *session.Instance) {
 		// its target tool to Claude or Codex must expose that target's slots.
 		// The initial target is still the current tool, and tool-pill changes
 		// refresh the options below.
-		if len(session.ConfiguredAccountNamesForSwitch(cfg)) > 0 {
-			accounts := session.ConfiguredAccountNamesForHarness(cfg, inst.Tool)
-			opts, labels, cursor := accountPillsForInstance(inst.Account, accounts)
+		accounts := session.ConfiguredAccountNamesForHarness(cfg, inst.Tool)
+		opts, labels, cursor := accountPillsForInstance(inst.Account, accounts)
+		jevOpts, jevLabels, jevCursor, jevOK := jevAccountPillsForInstance(inst.Account, inst.Tool, accounts)
+		if jevOK {
+			opts, labels, cursor = jevOpts, jevLabels, jevCursor
+		}
+		if len(session.ConfiguredAccountNamesForSwitch(cfg)) > 0 || jevOK {
 			d.fields = append(d.fields, editField{
 				key:         session.FieldAccount,
 				label:       accountFieldLabel(inst.Tool),
@@ -166,7 +170,7 @@ func readClaudeFlags(inst *session.Instance) (skip, auto bool) {
 
 // accountPillsForInstance returns the account row's options, their display
 // labels, and the cursor for the session's stored slot. Index 0 is always
-// "inherit" (the empty slot, i.e. the conductor/group/env chain).
+// the default account (the empty slot, i.e. the conductor/group/env chain).
 //
 // A stored slot whose profile has since been dropped from config.toml is
 // appended as its own pill rather than folded into "inherit" — the same guard
@@ -175,7 +179,7 @@ func readClaudeFlags(inst *session.Instance) (skip, auto bool) {
 // field to whatever slot 0 happens to be.
 func accountPillsForInstance(account string, accounts []string) (opts, labels []string, cursor int) {
 	opts = append([]string{""}, accounts...)
-	labels = append([]string{"inherit"}, accounts...)
+	labels = append([]string{"default account"}, accounts...)
 	for i, name := range accounts {
 		if name == account {
 			return opts, labels, i + 1
@@ -518,6 +522,11 @@ func (d *EditSessionDialog) refreshTargetAccountPills(targetHarness string) {
 			selected = field.pillOptions[field.pillCursor]
 		}
 		opts, labels, cursor := accountPillsForInstance(selected, accounts)
+		if !d.IsRemote() {
+			if jevOpts, jevLabels, jevCursor, ok := jevAccountPillsForInstance(selected, targetHarness, accounts); ok {
+				opts, labels, cursor = jevOpts, jevLabels, jevCursor
+			}
+		}
 		// A slot unavailable on the selected target is not carried forward as
 		// a hidden stale choice; the confirmation/backend receives only a
 		// target-harness configured account or the explicit default.
