@@ -1,24 +1,24 @@
- ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  11 sessions                                <version>
-  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • …
+ ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 • ◐ 2 • ○ 1 • ■ 2 • ✕ 5                <version>
+  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5    C Claude 3 (1▶) · $ shell 1  …
 SESSIONS                     │ PREVIEW
 ──────────────────────────── │ ─────────────────────────────────────────────────
 1·▾ alpha (7) ● 1 ◐ 1        │ claude-i18n  ◐ waiting
    ├─ ■ opencode-idle        │ 📁 /tmp/vc-<tmp>
-   ├─ ✕ claude-idle          │ ⏱ <age>
-   ├─ ◐ claude-waiting       │ 👁️ no viewers
-   └─ ■ claude-stopped       │  claude   beta
-    ▾ backend (3) ● 1        │ ────────────────── Claude ──────────────────
-     ├─ ✕ codex-idle         │ Status:  ● Connected
-     ├─ ● claude-running     │ Session: <uuid>
-     └─ ✕ claude-error       │ Model:   tool default
-2·▾ beta (4) ◐ 1             │ Fork:    f quick fork, F fork with options
-   ├─ ✕ gemini-idle          │
-   ├─ ✕ pi-idle              │ ────────────────── Output ──────────────────
-  ▶├─ ◐ claude-i18n          │ ⋮ 3 more lines above
-   └─ ○ shell-live           │ esc to interrupt
-  ▾ remotes/lab (0) · host … │ नमस्ते दुनिया 🚀🌟 यह परीक्षण है।
+   ├─ ✕ claude-idle          │ ⏱ <age> (Oct 15 <time>)
+   ├─ ◐ claude-waiting       │ 🆔 Deck ID: <id>-<id>
+   └─ ■ claude-stopped       │ 👁️ no viewers
+    ▾ backend (3) ● 1        │  claude   beta
+     ├─ ✕ codex-idle         │ ───────────── ▾ Claude @claude ─────────────
+     ├─ ● claude-running     │ Status:  ● Connected
+     └─ ✕ claude-error       │ Session: <uuid>
+2·▾ beta (4) ◐ 1             │ Name:    claude-i18n
+   ├─ ✕ gemini-idle          │ Model:   tool default
+   ├─ ✕ pi-idle              │ Fork:    f quick fork, F fork with options
+  ▶├─ ◐ claude-i18n          │ Copy:    C id/path/branch, c output, V pane
+   └─ ○ shell-live           │
+  ▾ remotes/lab (0) · host … │ ───────────────── ▾ Output ─────────────────
+                             │ ⋮ 5 more lines above
                              │ ❯
-                             │
                              │
 ────────────────────────────────────────────────────────────────────────────────
 ⏎ Attach n/N New R Restart T Fresh │   ↑↓ Nav / Search S Settings ? Help q Quit

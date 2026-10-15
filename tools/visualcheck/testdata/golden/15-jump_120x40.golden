@@ -1,21 +1,21 @@
  ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 running • ◐ 2 waiting • ○ 1 idle • ■ 2 stopped • ✕ 5 error                     <version>
-  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • ^ archived • t view • * time
+  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5    C Claude 3 (1▶) · $ shell 1  !@#& filter • 0 all • % open • ^ archived • …
 SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 a ▾ alpha (7) ● 1 ◐ 1                      │ 📁 alpha
-sa ├─ ■ opencode-idle opencode             │
-c  ├─ ✕ claude-idle claude                 │ 4 sessions
-d  ├─ ◐ claude-waiting claude              │
-e  └─ ■ claude-stopped claude              │ ◐ 1 waiting  ■ 2 stopped  ✕ 1 error
+sa ├─ ■ opencode-idle                      │
+c  ├─ ✕ claude-idle                        │ 4 sessions
+d  ├─ ◐ claude-waiting                     │
+e  └─ ■ claude-stopped                     │ ◐ 1 waiting  ■ 2 stopped  ✕ 1 error
 f   ▾ backend (3) ● 1                      │
-g    ├─ ✕ codex-idle codex                 │ ────────────────────────────── Sessions ──────────────────────────────
-h    ├─ ● claude-running claude            │   ■ opencode-idle opencode
-j    └─ ✕ claude-error claude              │   ✕ claude-idle claude
+g    ├─ ✕ codex-idle                       │ ────────────────────────────── Sessions ──────────────────────────────
+h    ├─ ● claude-running                   │   ■ opencode-idle opencode
+j    └─ ✕ claude-error                     │   ✕ claude-idle claude
 k ▾ beta (4) ◐ 1                           │   ◐ claude-waiting claude
-l  ├─ ✕ gemini-idle gemini                 │   ■ claude-stopped claude
-m  ├─ ✕ pi-idle pi                         │
-p  ├─ ◐ claude-i18n claude                 │ Tab toggle • r rename • d delete • g subgroup
-ss └─ ○ shell-live shell                   │
+l  ├─ ✕ gemini-idle                        │   ■ claude-stopped claude
+m  ├─ ✕ pi-idle                            │
+p  ├─ ◐ claude-i18n                        │ Tab toggle • r rename • d delete • g subgroup
+ss └─ ○ shell-live                         │
 w ▾ remotes/lab (0) · host down            │
                                            │
                                            │
@@ -37,4 +37,4 @@ w ▾ remotes/lab (0) · host down            │
                                            │
                                            │
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Jump:  a-z  Type hint  esc  Cancel              ↑↓ Nav │ +/- Move │ / Search │ G Global │ S Settings │ ? Help │ q Quit
+Jump:  a-z  Type hint  esc  Cancel   ↑↓ Nav │ +/- Move │ / Search │ G Global │ S Settings │ ? Help │ Z Health │ q Quit

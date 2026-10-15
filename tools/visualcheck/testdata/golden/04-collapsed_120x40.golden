@@ -1,13 +1,13 @@
  ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 running • ◐ 2 waiting • ○ 1 idle • ■ 2 stopped • ✕ 5 error                     <version>
-  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • ^ archived • t view • * time
+  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5    C Claude 3 (1▶) · $ shell 1  !@#& filter • 0 all • % open • ^ archived • …
 SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 ▶ ▸ alpha (7) ● 1 ◐ 1                      │ 📁 alpha
 2·▾ beta (4) ◐ 1                           │
-   ├─ ✕ gemini-idle gemini                 │ 4 sessions
-   ├─ ✕ pi-idle pi                         │
-   ├─ ◐ claude-i18n claude                 │ ◐ 1 waiting  ■ 2 stopped  ✕ 1 error
-   └─ ○ shell-live shell                   │
+   ├─ ✕ gemini-idle                        │ 4 sessions
+   ├─ ✕ pi-idle                            │
+   ├─ ◐ claude-i18n                        │ ◐ 1 waiting  ■ 2 stopped  ✕ 1 error
+   └─ ○ shell-live                         │
   ▾ remotes/lab (0) · host down            │ ────────────────────────────── Sessions ──────────────────────────────
                                            │   ■ opencode-idle opencode
                                            │   ✕ claude-idle claude

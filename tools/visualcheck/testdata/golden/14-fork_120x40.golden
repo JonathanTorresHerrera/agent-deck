@@ -1,30 +1,30 @@
  ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 running • ◐ 3 waiting • ○ 1 idle • ■ 2 stopped • ✕ 5 error                      <version>
-  All    ● 1   ◐ 3   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • ^ archived • t view • * time
+  All    ● 1   ◐ 3   ○ 1   ■ 2   ✕ 5    C Claude 4 (1▶) · $ shell 1  !@#& filter • 0 all • % open • ^ archived • …
 SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 1·▾ alpha (8) ● 1 ◐ 2                      │ claude-waiting (fork)  ◐ waiting
-   ├─ ■ opencode-idle opencode             │ 📁 /tmp/vc-<tmp>
-   ├─ ✕ claude-idle claude                 │ ⏱ <age>
-   ├─ ◐ claude-waiting claude              │ 👁️ no viewers
-   ├─ ■ claude-stopped claude              │  claude   alpha
-  ▶└─ ◐ claude-… claude [fork/claude-...]  │ ────────────────────────────── Worktree ──────────────────────────────
-    ▾ backend (3) ● 1                      │ Branch:  fork/claude-waiting
-     ├─ ✕ codex-idle codex                 │ Repo:    /tmp/vc-<tmp>
-     ├─ ● claude-running claude            │ Path:    /tmp/vc-<tmp>
-     └─ ✕ claude-error claude              │ Status:  clean
-2·▾ beta (4) ◐ 1                           │ Setup:   b re-run setup script
-   ├─ ✕ gemini-idle gemini                 │ Finish:  W merge + cleanup
-   ├─ ✕ pi-idle pi                         │ ─────────────────────────────── Claude ───────────────────────────────
-   ├─ ◐ claude-i18n claude                 │ Status:  ● Connected
-   └─ ○ shell-live shell                   │ Session: <uuid>
-  ▾ remotes/lab (0) · host down            │ Model:   tool default
+   ├─ ■ opencode-idle                      │ 📁 /tmp/vc-<tmp>
+   ├─ ✕ claude-idle                        │ ⏱ <age> (Oct 15 <time>)
+   ├─ ◐ claude-waiting                     │ 🆔 Deck ID: <id>-<id>
+   ├─ ■ claude-stopped                     │ 👁️ no viewers
+  ▶└─ ◐ claude-waiting… [fork/claude-...]  │  claude   alpha
+    ▾ backend (3) ● 1                      │ ────────────────────────────── Worktree ──────────────────────────────
+     ├─ ✕ codex-idle                       │ Branch:  fork/claude-waiting
+     ├─ ● claude-running                   │ Repo:    /tmp/vc-<tmp>
+     └─ ✕ claude-error                     │ Path:    /tmp/vc-<tmp>
+2·▾ beta (4) ◐ 1                           │ Status:  clean
+   ├─ ✕ gemini-idle                        │ Setup:   b re-run setup script
+   ├─ ✕ pi-idle                            │ Finish:  W merge + cleanup
+   ├─ ◐ claude-i18n                        │ ────────────────────────── ▾ Claude @claude ──────────────────────────
+   └─ ○ shell-live                         │ Status:  ● Connected
+  ▾ remotes/lab (0) · host down            │ Session: <uuid>
+                                           │ Name:    claude-waiting (fork)
+                                           │ Model:   tool default
+                                           │ Copy:    C id/path/branch, c output, V pane
                                            │
-                                           │ ─────────────────────────────── Output ───────────────────────────────
+                                           │ ────────────────────────────── ▾ Output ──────────────────────────────
                                            │ Claude Code synthetic fixture
                                            │ ❯
-                                           │
-                                           │
-                                           │
                                            │
                                            │
                                            │
