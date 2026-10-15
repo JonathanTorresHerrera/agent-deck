@@ -500,6 +500,17 @@ func mergeInstanceSnapshot(update InstanceSnapshot, current *InstanceRow) (*Inst
 			continue
 		}
 		if !snapshotValueEqual(actual.Field(i).Interface(), stored.Field(i).Interface()) && !snapshotValueEqual(actual.Field(i).Interface(), want.Field(i).Interface()) {
+			// A pane monitor can observe the exit between a graceful stop and
+			// its save. The explicit stopped intent wins that observation only
+			// while this is still the same launch; a concurrent restart must
+			// retain the normal conflict.
+			if name == "Status" && want.Field(i).String() == "stopped" &&
+				paneDerivedStatuses[actual.Field(i).String()] &&
+				current.TmuxSession == update.Stored.TmuxSession &&
+				sameSnapshotLaunch(current, update.Stored) {
+				out.Field(i).Set(want.Field(i))
+				continue
+			}
 			// Observations of the same live session are merged, not refused
 			// (issue #2209); see liveness_merge.go for the policy.
 			resolved, ok := mergeLivenessScalar(name, want.Field(i).Interface(), actual.Field(i).Interface())
@@ -514,6 +525,12 @@ func mergeInstanceSnapshot(update InstanceSnapshot, current *InstanceRow) (*Inst
 	var err error
 	merged.ToolData, err = mergeSnapshotToolData(update, current)
 	return merged, err
+}
+
+func sameSnapshotLaunch(current, stored *InstanceRow) bool {
+	currentData, currentErr := toolDataFields(current.ToolData)
+	storedData, storedErr := toolDataFields(stored.ToolData)
+	return currentErr == nil && storedErr == nil && sameJSON(currentData["last_started_at"], storedData["last_started_at"])
 }
 
 func snapshotValueEqual(a, b any) bool {
