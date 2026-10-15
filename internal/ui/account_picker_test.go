@@ -194,8 +194,8 @@ func TestEditSessionDialogAccountRow(t *testing.T) {
 	if got := field.pillOptions[field.pillCursor]; got != "personal" {
 		t.Errorf("preselected account = %q, want the session's stored slot \"personal\"", got)
 	}
-	if got := field.pillLabels[0]; got != "inherit" {
-		t.Errorf("first pill label = %q, want \"inherit\"", got)
+	if got := field.pillLabels[0]; got != "default account" {
+		t.Errorf("first pill label = %q, want \"default account\"", got)
 	}
 
 	// No edit → no change (a save-without-touching must not rewrite the slot).
