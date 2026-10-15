@@ -81,8 +81,19 @@ func TestViewersPreview_Golden(t *testing.T) {
 			step.seed()
 			frame := home.renderPreviewPane(90, 12)
 			// Only the header block is under test; the output section below
-			// it belongs to other goldens.
-			lines := strings.Split(stripAnsi(frame), "\n")
+			// it belongs to other goldens. The current header also includes a
+			// generated Deck ID and today's date, which are unrelated to the
+			// viewers indicator and change on every test run.
+			var lines []string
+			for _, line := range strings.Split(stripAnsi(frame), "\n") {
+				if strings.Contains(line, "Deck ID:") {
+					continue
+				}
+				if i := strings.Index(line, "⏱ just now ("); i >= 0 {
+					line = line[:i] + "⏱ just now"
+				}
+				lines = append(lines, line)
+			}
 			if len(lines) > 6 {
 				lines = lines[:6]
 			}
