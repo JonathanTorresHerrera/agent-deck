@@ -34,12 +34,13 @@ func applyAssertDone(message string, enabled bool) string {
 }
 
 // preAcceptLaunchTrust seeds Claude Code's per-directory trust flag
-// (projects[dir].hasTrustDialogAccepted) in the root ~/.claude.json before
-// the launch spawn, for claude-tool instances only — no other tool shows
-// this prompt. Keyed by realpath, matching the loadout trust seed (#1149),
-// since Claude resolves the cwd through symlinks. Best-effort: a failure is
-// reported to stderr and never blocks launch, matching every other
-// PreAcceptClaudeTrust call site.
+// (projects[dir].hasTrustDialogAccepted) before the launch spawn, in the root
+// ~/.claude.json and in the instance's own seat config (ClaudeTrustConfigPaths).
+// Claude-tool instances only: Codex is seeded on start, in its own CODEX_HOME
+// (preAcceptCodexWorkspaceTrust). Keyed by realpath, matching the loadout
+// trust seed (#1149), since Claude resolves the cwd through symlinks.
+// Best-effort: a failure is reported to stderr and never blocks launch,
+// matching every other PreAcceptClaudeTrust call site.
 func preAcceptLaunchTrust(inst *session.Instance) {
 	if inst.Tool != "claude" {
 		return
@@ -48,8 +49,10 @@ func preAcceptLaunchTrust(inst *session.Instance) {
 	if real, err := filepath.EvalSymlinks(trustDir); err == nil {
 		trustDir = real
 	}
-	if err := session.PreAcceptClaudeTrust(session.GetUserMCPRootPath(), trustDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: folder trust pre-seed for %q failed (Claude launch may stall on the trust prompt): %v\n", trustDir, err)
+	for _, cfg := range session.ClaudeTrustConfigPaths(inst) {
+		if err := session.PreAcceptClaudeTrust(cfg, trustDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: folder trust pre-seed for %q in %s failed (Claude launch may stall on the trust prompt): %v\n", trustDir, cfg, err)
+		}
 	}
 }
 

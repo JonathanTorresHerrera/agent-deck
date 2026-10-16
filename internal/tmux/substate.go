@@ -50,6 +50,14 @@ const (
 	// most important new signal. Pairs with status "error".
 	SubstateModelUnavailable Substate = "model-unavailable"
 
+	// SubstateModelUnsupported marks a Codex session whose turn the API
+	// rejected with a 400 invalid_request_error, e.g. a model its ChatGPT-login
+	// account cannot use. Pairs with status "error". Kept apart from
+	// model-unavailable on purpose: that one triggers selfheal's model-switch
+	// restart, while this one needs the launcher to pick a valid model.
+	// SubstateDetail carries "model <name>: <message>".
+	SubstateModelUnsupported Substate = "model-unsupported"
+
 	// SubstateAuth401 marks an auth/connection failure banner ("Please run
 	// /login", "API Error: 401", "socket connection closed"). Pairs with
 	// status "error". Built on the #1400 error-banner detection.
@@ -145,14 +153,15 @@ func (d *PromptDetector) ClassifySubstate(content string) Substate {
 }
 
 // SubstateDetail returns free-text detail for the substate ClassifySubstate
-// would return for content, or "" when there is none. Today only the codex
-// usage-limit banner carries one: the retry time the banner prints ("try
-// again at Oct 10th, 2026 8:03 AM").
+// would return for content, or "" when there is none. Only codex banners carry
+// one: the retry time a usage-limit banner prints ("try again at Oct 10th,
+// 2026 8:03 AM"), and the rejected model and message of an invalid-request
+// banner ("model gpt-5.5-codex: The 'gpt-5.5-codex' model is not supported ...").
 func (d *PromptDetector) SubstateDetail(content string) string {
 	if d.tool != "codex" {
 		return ""
 	}
-	if kind, detail := scanCodexErrorBanner(content); kind == codexBannerUsageLimit {
+	if kind, detail := scanCodexErrorBanner(content); kind == codexBannerUsageLimit || kind == codexBannerInvalidRequest {
 		return detail
 	}
 	return ""
@@ -167,6 +176,8 @@ func classifyCodexSubstate(content string) Substate {
 		return SubstateUsageLimit
 	case codexBannerAuth:
 		return SubstateAuth401
+	case codexBannerInvalidRequest:
+		return SubstateModelUnsupported
 	}
 	if hasCodexInteractiveMenu(content) {
 		return SubstateInteractiveMenu

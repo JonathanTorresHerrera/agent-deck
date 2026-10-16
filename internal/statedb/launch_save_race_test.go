@@ -94,6 +94,30 @@ func TestLaunchPostStartSaveMergesStatusVariant(t *testing.T) {
 	require.Equal(t, "agentdeck_worker_c5322ee1", committed[0].TmuxSession)
 }
 
+func TestGracefulStopSaveMergesConcurrentExitObservation(t *testing.T) {
+	db, base := launchRaceFixture(t)
+	base.ToolData = json.RawMessage(`{"last_started_at":1500}`)
+	base.TmuxSession = "agentdeck_worker_c5322ee1"
+	require.NoError(t, db.SaveInstance(base))
+	rows, err := db.LoadInstances()
+	require.NoError(t, err)
+	base = rows[0]
+
+	require.NoError(t, db.WriteStatus("sess", "error", "claude"))
+	desired := CloneInstanceRow(base)
+	desired.Status = "stopped"
+	committed, err := db.MergeInstanceSnapshots([]InstanceSnapshot{{Original: base, Stored: base, Desired: desired}}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "stopped", committed[0].Status)
+
+	// A new launch cannot be overwritten by a stop based on the old pane.
+	require.NoError(t, db.SaveInstance(base))
+	_, err = db.DB().Exec("UPDATE instances SET status = 'running', tool_data = ? WHERE id = 'sess'", `{"last_started_at":1600}`)
+	require.NoError(t, err)
+	_, err = db.MergeInstanceSnapshots([]InstanceSnapshot{{Original: base, Stored: base, Desired: desired}}, nil)
+	require.ErrorContains(t, err, "stale concurrent Status conflict")
+}
+
 func TestLivenessMergeLastAccessedKeepsLater(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

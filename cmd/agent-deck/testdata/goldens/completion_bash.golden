@@ -63,7 +63,7 @@ _agent_deck_completion() {
             ;;
         session)
             if ((cword == start + 1)); then
-                COMPREPLY=($(compgen -W 'start stop remove cleanup prune archive unarchive restart revive fork handoff attach focus show viewers current primer set-parent unset-parent update set-transition-notify set-title-lock set switch-account move send approve send-keys output children search' -- "$cur"))
+                COMPREPLY=($(compgen -W 'start stop remove cleanup prune archive unarchive restart revive fork handoff attach focus show accept-trust viewers current primer set-parent unset-parent update set-transition-notify set-title-lock set switch-account move send approve send-keys output children search' -- "$cur"))
                 return 0
             fi
             sub=${words[start+1]}
@@ -287,6 +287,7 @@ _agent_deck_completion() {
         remove::0) kind=sessions ;;
         rename::0) kind=sessions ;;
         rm::0) kind=sessions ;;
+        session:accept-trust:0) kind=sessions ;;
         session:approve:0) kind=sessions ;;
         session:archive:0) kind=sessions ;;
         session:attach:0) kind=sessions ;;
