@@ -502,19 +502,32 @@ func (s *Storage) CommitNativeHarnessSwitch(inst *Instance, result *HarnessSwitc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	source := nativeSwitchStorageIdentity(result.nativeSource)
+	expectedSource := nativeSwitchStorageIdentity(result.nativeSource)
 	target := nativeSwitchStorageIdentity(result.nativeTarget)
 	var (
 		committed *statedb.InstanceRow
 		err       error
 	)
+	currentRow, loadErr := s.db.LoadInstanceByID(inst.ID)
+	if loadErr != nil {
+		return fmt.Errorf("read native switch source: %w", loadErr)
+	}
+	if currentRow == nil {
+		return fmt.Errorf("native switch source deletion conflict for instance %s", inst.ID)
+	}
+	freshSource, sourceErr := statedb.NativeHarnessSwitchIdentityFromRow(currentRow)
+	if sourceErr != nil {
+		return fmt.Errorf("read native switch source: %w", sourceErr)
+	}
 	if result.nativeStorageAcknowledgement {
 		// The CAS already succeeded, but writing its journal acknowledgement
 		// failed. A reloaded target can only confirm that exact durable target;
 		// it must not retry the source-bound CAS or replay lifecycle work.
 		committed, err = s.db.ConfirmNativeHarnessSwitchTarget(target)
+	} else if !nativeSwitchStorageIdentityEqual(freshSource, expectedSource) && !nativeSwitchStorageIdentityEqual(freshSource, target) {
+		return fmt.Errorf("commit native harness switch: native switch source identity conflict for instance %s", inst.ID)
 	} else {
-		committed, err = s.db.CommitNativeHarnessSwitch(source, target)
+		committed, err = s.db.CommitNativeHarnessSwitch(freshSource, target)
 	}
 	if err != nil {
 		return fmt.Errorf("commit native harness switch: %w", err)
@@ -564,6 +577,11 @@ func (s *Storage) FinalizeCrossHarnessSupersession(source, target *Instance) err
 	}
 	_ = s.db.Touch()
 	return nil
+}
+
+func nativeSwitchStorageIdentityEqual(a, b statedb.NativeHarnessSwitchIdentity) bool {
+	return a.ID == b.ID && a.Tool == b.Tool && a.Account == b.Account && a.ProjectPath == b.ProjectPath && a.Command == b.Command &&
+		a.ClaudeSessionID == b.ClaudeSessionID && a.CodexSessionID == b.CodexSessionID
 }
 
 func nativeSwitchStorageIdentity(identity switchIdentity) statedb.NativeHarnessSwitchIdentity {

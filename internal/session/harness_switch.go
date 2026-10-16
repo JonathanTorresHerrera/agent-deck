@@ -79,6 +79,13 @@ type HarnessSwitchResult struct {
 	nativeStorageAcknowledgement bool
 }
 
+// NativeStorageAlreadyCommitted reports whether ExecuteHarnessSwitch already
+// durably wrote the scoped registry mutation, so a follow-up
+// CommitNativeHarnessSwitch only needs journal acknowledgement.
+func (r *HarnessSwitchResult) NativeStorageAlreadyCommitted() bool {
+	return r != nil && r.nativeStorageAcknowledgement
+}
+
 var ErrSwitchBusy = errors.New("session switch already in progress")
 
 const (
@@ -192,8 +199,13 @@ func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOpt
 	// requires either the scoped storage CAS (from its source identity) or an
 	// acknowledgement after that CAS was durably observed on its target. Neither
 	// path may replay lifecycle work.
-	if journal != nil && journal.State == switchCommitted && sourceRecoveryIdentityMatches(journal.Source, inst) && journalMatchesRequest(journal, inst, preview, opts) {
-		return resultFromCommittedJournal(preview, journal, journalPath, false), nil
+	if journal != nil && journal.State == switchCommitted && journalMatchesRequest(journal, inst, preview, opts) {
+		switch {
+		case targetIdentityMatches(journal.Target, inst):
+			return resultFromCommittedJournal(preview, journal, journalPath, instanceSnapshotMatchesNativeTarget(inst, journal.Target)), nil
+		case sourceRecoveryIdentityMatches(journal.Source, inst):
+			return resultFromCommittedJournal(preview, journal, journalPath, false), nil
+		}
 	}
 	if acknowledged, acknowledgedPath, findErr := committedNativeJournalForAcknowledgement(inst.ID, inst); findErr != nil {
 		return nil, findErr
@@ -461,6 +473,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 		j.Failure = "folder trust pre-seed: " + trustErr.Error()
 	}
 	oldAccount := inst.Account
+	sourceIdentity := identityForInstance(inst)
 	storageAcknowledged, err := commitNativeSwitchAccount(journalPath, j, inst, preview.TargetAccount, wasRunning, opts.Storage)
 	if err != nil {
 		return nil, err
@@ -474,14 +487,14 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 	if sourcePath == "" {
 		conversation = "no conversation to migrate (fresh session); target account committed; native destination readiness was not asserted"
 	}
-	result := nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: inst.Tool, NewTool: inst.Tool, OldAccount: oldAccount, NewAccount: inst.Account, Continuity: "native", Conversation: conversation, SourceArtifactSHA256: sourceHash, DestinationPath: j.Destination, DestinationArchived: j.DestinationArchived, Transcript: choice, Warnings: warnings, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, j.Source, j.Target)
+	result := nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: inst.Tool, NewTool: inst.Tool, OldAccount: oldAccount, NewAccount: inst.Account, Continuity: "native", Conversation: conversation, SourceArtifactSHA256: sourceHash, DestinationPath: j.Destination, DestinationArchived: j.DestinationArchived, Transcript: choice, Warnings: warnings, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, sourceIdentity, identityForInstance(inst))
 	result.nativeJournalPath = journalPath
 	result.nativeStorageAcknowledgement = storageAcknowledged
 	if !opts.NoStart && wasRunning {
 		if err := startNativeSwitchInstance(inst); err != nil {
 			result.Committed = false
 			inst.Account = oldAccount
-			if restoreErr := revertNativeSwitchStorage(opts.Storage, inst, storageAcknowledged, j.Target, j.Source); restoreErr != nil {
+			if restoreErr := revertNativeSwitchStorage(opts.Storage, inst, storageAcknowledged, targetIdentityFor(inst, preview), sourceIdentity); restoreErr != nil {
 				j.Failure = fmt.Sprintf("target start failed: %v; persisted account restore failed: %v", err, restoreErr)
 			} else if restartErr := startNativeSwitchInstance(inst); restartErr != nil {
 				j.Failure = fmt.Sprintf("target start failed: %v; source rollback failed: %v", err, restartErr)
@@ -626,14 +639,14 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	if err != nil {
 		return nil, err
 	}
-	result := nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: inst.Tool, NewTool: inst.Tool, OldAccount: oldAccount, NewAccount: inst.Account, Continuity: "native", Conversation: "Codex rollout migrated; native destination readiness has not yet been asserted", SourceArtifactSHA256: sourceHash, DestinationPath: destination, DestinationArchived: j.DestinationArchived, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, j.Source, j.Target)
+	result := nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: inst.Tool, NewTool: inst.Tool, OldAccount: oldAccount, NewAccount: inst.Account, Continuity: "native", Conversation: "Codex rollout migrated; native destination readiness has not yet been asserted", SourceArtifactSHA256: sourceHash, DestinationPath: destination, DestinationArchived: j.DestinationArchived, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, oldIdentity, identityForInstance(inst))
 	result.nativeJournalPath = journalPath
 	result.nativeStorageAcknowledgement = storageAcknowledged
 	if !opts.NoStart && wasRunning {
 		if err := startNativeSwitchInstance(inst); err != nil {
 			result.Committed = false
 			restoreSwitchIdentity(inst, oldIdentity, oldIdentity.Command)
-			storageErr := revertNativeSwitchStorage(opts.Storage, inst, storageAcknowledged, j.Target, j.Source)
+			storageErr := revertNativeSwitchStorage(opts.Storage, inst, storageAcknowledged, identityForInstance(inst), oldIdentity)
 			var rollbackErr error
 			if storageErr == nil {
 				rollbackErr = startNativeSwitchInstance(inst)
@@ -828,7 +841,9 @@ func commitNativeSwitchAccount(path string, j *switchJournal, inst *Instance, ac
 	if inst == nil || j == nil {
 		return false, fmt.Errorf("native switch commit is missing source identity")
 	}
+	sourceIdentity := identityForInstance(inst)
 	inst.Account = account
+	targetIdentity := identityForInstance(inst)
 	j.State = switchCommitted
 	if err := harnessSwitchJournalWrite(path, j); err != nil {
 		returnCause := fmt.Errorf("persist native switch commit: %w", err)
@@ -838,7 +853,7 @@ func commitNativeSwitchAccount(path string, j *switchJournal, inst *Instance, ac
 	if storage == nil {
 		return false, nil
 	}
-	stub := nativeHarnessSwitchResult(&HarnessSwitchResult{Committed: true}, j.Source, identityForInstance(inst))
+	stub := nativeHarnessSwitchResult(&HarnessSwitchResult{Committed: true}, sourceIdentity, targetIdentity)
 	if err := storage.CommitNativeHarnessSwitch(inst, stub); err != nil {
 		cause := fmt.Errorf("persist account to session record: %w", err)
 		_, rollbackErr := switchFailedAfterStop(path, j, inst, wasRunning, cause)
@@ -889,7 +904,7 @@ func completeNativeHarnessSwitchJournal(result *HarnessSwitchResult) error {
 	if journal.State != switchCommitted {
 		return fmt.Errorf("native switch journal is %q before storage acknowledgement", journal.State)
 	}
-	if !sameSwitchIdentity(journal.Source, result.nativeSource) || !sameSwitchIdentity(journal.Target, result.nativeTarget) {
+	if !sameNativeSwitchRegistryTarget(journal.Target, result.nativeTarget) {
 		return fmt.Errorf("native switch journal identity changed before storage acknowledgement")
 	}
 	journal.State, journal.UpdatedAt = switchCompleted, time.Now()
@@ -898,6 +913,17 @@ func completeNativeHarnessSwitchJournal(result *HarnessSwitchResult) error {
 	}
 	cleanupCompletedSwitchArtifacts(journal)
 	return nil
+}
+
+func sameNativeSwitchRegistryTarget(left, right switchIdentity) bool {
+	return left.InstanceID == right.InstanceID &&
+		normalizedJournalHarness(left.Tool) == normalizedJournalHarness(right.Tool) &&
+		(left.StorageTool == "" || right.StorageTool == "" || left.StorageTool == right.StorageTool) &&
+		left.Account == right.Account &&
+		left.ProjectPath == right.ProjectPath &&
+		left.Command == right.Command &&
+		left.ClaudeID == right.ClaudeID &&
+		left.CodexID == right.CodexID
 }
 
 func sameSwitchIdentity(left, right switchIdentity) bool {
@@ -1931,6 +1957,30 @@ func resultFromCompletedJournal(preview *SwitchPreview, j *switchJournal) *Harne
 	}
 	return nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: j.Source.Tool, NewTool: j.Target.Tool, OldAccount: j.Source.Account, NewAccount: j.Target.Account, Continuity: map[bool]string{true: "native", false: "transferred"}[IsClaudeCompatible(j.Target.Tool)], Conversation: conversation, SourceArtifactSHA256: j.SourceSHA256, DestinationPath: j.Destination, DestinationReady: j.DestinationReady, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, j.Source, j.Target)
 }
+
+// RecoverNativeHarnessSwitch acknowledges a committed native switch whose
+// lifecycle finished and the registry already holds the target identity, but
+// whose journal completion or a follow-up persistence step failed. It does not
+// replay stop/start, export, or transcript migration.
+func RecoverNativeHarnessSwitch(inst *Instance, storage *Storage) (*HarnessSwitchResult, error) {
+	if inst == nil || storage == nil {
+		return nil, fmt.Errorf("native switch recovery is incomplete")
+	}
+	acknowledged, acknowledgedPath, err := committedNativeJournalForAcknowledgement(inst.ID, inst)
+	if err != nil {
+		return nil, err
+	}
+	if acknowledged == nil {
+		return nil, fmt.Errorf("no committed native switch journal requires recovery for instance %s", inst.ID)
+	}
+	preview := &SwitchPreview{TargetHarness: acknowledged.Target.Tool, TargetAccount: acknowledged.Target.Account}
+	result := resultFromCommittedJournal(preview, acknowledged, acknowledgedPath, true)
+	if err := storage.CommitNativeHarnessSwitch(inst, result); err != nil {
+		return result, fmt.Errorf("recover native harness switch: %w", err)
+	}
+	return result, nil
+}
+
 func sha256File(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

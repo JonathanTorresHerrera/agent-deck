@@ -107,6 +107,8 @@ func handleSession(profile string, args []string) {
 		handleSessionSwitch(profile, args[1:])
 	case "switch-preview":
 		handleSessionSwitchPreview(profile, args[1:])
+	case "switch-recover":
+		handleSessionSwitchRecover(profile, args[1:])
 	case "move", "mv":
 		handleSessionMove(profile, args[1:])
 	case "image-upload":
@@ -176,6 +178,7 @@ func printSessionHelp() {
 	fmt.Println("  set <id> <field> <value>  Update session property")
 	fmt.Println("  switch <id> --to-harness <harness> [--to-account <account>]  Switch account or create a confirmed fresh cross-harness target")
 	fmt.Println("  switch-account <id> <account>  Switch Claude account and migrate the conversation")
+	fmt.Println("  switch-recover <id>     Acknowledge a committed native switch after a persistence failure")
 	fmt.Println("  move <id> <path>        Move session to a new path (migrates Claude history)")
 	fmt.Println("  send <id> <message>     Send a message to a running session (--queue: never silently lost, see send-status; --image <path>)")
 	fmt.Println("  image-upload <id>       Stage an attachment from stdin (--name <uuid>.png --json; max 20 MiB)")
