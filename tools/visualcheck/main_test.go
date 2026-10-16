@@ -69,6 +69,13 @@ func TestScrubVersionBuildMetadata(t *testing.T) {
 	}
 }
 
+func TestScrubRenderedCalendarDate(t *testing.T) {
+	got := scrubFrame("⏱ just now (Oct 15 23:59)")
+	if got != "⏱ <age> (<date> <time>)" {
+		t.Fatalf("scrubFrame date = %q, want calendar date normalized", got)
+	}
+}
+
 func TestScrubFrameIsIdempotent(t *testing.T) {
 	in := "v1.2.3 session f47ac10b-58cc-4372-a567-0e02b2c3d479 at 09:15:00, 5m ago, socket vc-999"
 	once := scrubFrame(in)

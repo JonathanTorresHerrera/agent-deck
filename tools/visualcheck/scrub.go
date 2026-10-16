@@ -23,6 +23,7 @@ var scrubRules = []scrubRule{
 	{"semver", regexp.MustCompile(`\bv?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?\b`), "<version>"},
 	{"clock-time", regexp.MustCompile(`\b\d{1,2}:\d{2}(:\d{2})?\b`), "<time>"},
 	{"iso-date", regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?\b`), "<date>"},
+	{"calendar-date", regexp.MustCompile(`\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2}\b`), "<date>"},
 	{"relative-age", regexp.MustCompile(`\b\d+(\.\d+)?(s|ms|m|h|d|w)\b`), "<age>"},
 	{"just-now", regexp.MustCompile(`\bjust now\b`), "<age>"},
 	// The attach-shell step's real system-shell prompt embeds the sandbox

@@ -5,7 +5,7 @@ SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 1·▾ alpha (7) ● 1 ◐ 1                      │ claude-waiting  ◐ waiting
    ├─ ■ opencode-idle                      │ 📁 /tmp/vc-<tmp>
-   ├─ ✕ claude-idle                        │ ⏱ <age> ago (Oct 15 <time>)
+   ├─ ✕ claude-idle                        │ ⏱ <age> ago (<date> <time>)
   ▶├─ ◐ claude-waiting                     │ 🆔 Deck ID: <id>-<id>
    └─ ■ claude-stopped                     │ 👁️ no viewers
     ▾ backend (3) ● 1                      │  claude   alpha
