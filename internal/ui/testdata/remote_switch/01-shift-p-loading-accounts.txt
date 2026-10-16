@@ -22,7 +22,7 @@
                              │      codex     pi     copilot     crush     muse           │                             
                              │      cursor agent     hermes     deepseek     omp          │                             
                              │      Account for selected harness (configured; auth u…:    │                             
-                             │        inherit     personal (not configured)               │                             
+                             │        default account     personal (not configured)       │                             
                              │                                                            │                             
                              │      Loading account slots from lab…                       │                             
                              │                                                            │                             

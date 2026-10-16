@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -275,20 +276,22 @@ func CollectHealthReport(instances []*Instance) HealthReport {
 	var infra HealthSection
 	infra.Title = "Infrastructure"
 
-	home, _ := os.UserHomeDir()
-	keepalive := filepath.Join(home, ".agent-deck", "bin", "keepalive.sh")
-	if _, err := os.Stat(keepalive); err == nil {
-		if out, err := healthRun(3*time.Second, "pgrep", "-f", "agent-deck/bin/keepalive"); err == nil && strings.TrimSpace(out) != "" {
-			infra.Items = append(infra.Items, HealthItem{
-				Level: "ok", Name: "keep-alive loop running",
-				Detail: "WSL distro survives closing every terminal window",
-			})
-		} else {
-			infra.Items = append(infra.Items, HealthItem{
-				Level: "warn", Name: "keep-alive loop NOT running",
-				Detail: "closing the last terminal may take the whole distro (and all sessions) down",
-				Fix:    "start scheduled task AgentDeckKeepalive (or run keepalive.sh)",
-			})
+	legacyDir, legacyErr := agentpaths.LegacyDir()
+	if legacyErr == nil {
+		keepalive := filepath.Join(legacyDir, "bin", "keepalive.sh")
+		if _, err := os.Stat(keepalive); err == nil {
+			if out, err := healthRun(3*time.Second, "pgrep", "-f", "agent-deck/bin/keepalive"); err == nil && strings.TrimSpace(out) != "" {
+				infra.Items = append(infra.Items, HealthItem{
+					Level: "ok", Name: "keep-alive loop running",
+					Detail: "WSL distro survives closing every terminal window",
+				})
+			} else {
+				infra.Items = append(infra.Items, HealthItem{
+					Level: "warn", Name: "keep-alive loop NOT running",
+					Detail: "closing the last terminal may take the whole distro (and all sessions) down",
+					Fix:    "start scheduled task AgentDeckKeepalive (or run keepalive.sh)",
+				})
+			}
 		}
 	}
 	if u, err := user.Current(); err == nil {
@@ -331,7 +334,8 @@ func CollectHealthReport(instances []*Instance) HealthReport {
 		}
 		infra.Items = append(infra.Items, item)
 	}
-	if snap := filepath.Join(home, ".agent-deck", "running-snapshot"); true {
+	if legacyErr == nil {
+		snap := filepath.Join(legacyDir, "running-snapshot")
 		if fi, err := os.Stat(snap); err == nil {
 			infra.Items = append(infra.Items, HealthItem{
 				Level: "info", Name: "running-snapshot",
@@ -382,19 +386,21 @@ func CollectHealthReport(instances []*Instance) HealthReport {
 		Detail: fmt.Sprintf("%d total (%d archived, %d live)", total, archived, liveCount),
 	})
 	var logBytes int64
-	logDir := filepath.Join(home, ".agent-deck", "logs")
-	if entries, err := os.ReadDir(logDir); err == nil {
-		for _, e := range entries {
-			if fi, err := e.Info(); err == nil {
-				logBytes += fi.Size()
+	if legacyErr == nil {
+		logDir := filepath.Join(legacyDir, "logs")
+		if entries, err := os.ReadDir(logDir); err == nil {
+			for _, e := range entries {
+				if fi, err := e.Info(); err == nil {
+					logBytes += fi.Size()
+				}
 			}
+			item := HealthItem{Level: "info", Name: "logs", Detail: healthMB(logBytes)}
+			if logBytes > 200*(1<<20) {
+				item.Level = "warn"
+				item.Fix = "logs growing large — prune ~/.agent-deck/logs"
+			}
+			store.Items = append(store.Items, item)
 		}
-		item := HealthItem{Level: "info", Name: "logs", Detail: healthMB(logBytes)}
-		if logBytes > 200*(1<<20) {
-			item.Level = "warn"
-			item.Fix = "logs growing large — prune ~/.agent-deck/logs"
-		}
-		store.Items = append(store.Items, item)
 	}
 	r.Sections = append(r.Sections, store)
 

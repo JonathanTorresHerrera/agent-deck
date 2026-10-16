@@ -1,17 +1,17 @@
- ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  11 sessions                                 <version>
-  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • …
+ ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 • ◐ 2 • ○ 1 • ■ 2 • ✕ 5                 <version>
+  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5    C Claude 3 (1▶) · $ shell 1  …
 SESSIONS                     │ PREVIEW
 ──────────────────────────── │ ─────────────────────────────────────────────────
 1·▾ alpha (7) ● 1 ◐ 1        │ shell-live  ○ idle
    ├─ ■ opencode-idle        │ 📁 /tmp/vc-<tmp>
-   ├─ ✕ claude-idle          │ ⏱ <age>
-   ├─ ◐ claude-waiting       │ 👁️ no viewers
-   └─ ■ claude-stopped       │  shell   beta
-    ▾ backend (3) ● 1        │
-     ├─ ✕ codex-idle         │ ────────────────── Output ──────────────────
-     ├─ ● claude-running     │ $
-     └─ ✕ claude-error       │
-2·▾ beta (4) ◐ 1             │
+   ├─ ✕ claude-idle          │ ⏱ <age> (<date> <time>)
+   ├─ ◐ claude-waiting       │ 🆔 Deck ID: <id>-<id>
+   └─ ■ claude-stopped       │ 👁️ no viewers
+    ▾ backend (3) ● 1        │  shell   beta
+     ├─ ✕ codex-idle         │ Copy:    C id/path/branch, c output, V pane
+     ├─ ● claude-running     │
+     └─ ✕ claude-error       │ ───────────────── ▾ Output ─────────────────
+2·▾ beta (4) ◐ 1             │ $
    ├─ ✕ gemini-idle          │
    ├─ ✕ pi-idle              │
    ├─ ◐ claude-i18n          │

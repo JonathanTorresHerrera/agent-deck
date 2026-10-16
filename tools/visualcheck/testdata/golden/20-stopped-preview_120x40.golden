@@ -1,22 +1,25 @@
  ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 running • ◐ 2 waiting • ○ 1 idle • ■ 2 stopped • ✕ 5 error                     <version>
-  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • ^ archived • t view • * time
+  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5    C Claude 3 (1▶) · $ shell 1  !@#& filter • 0 all • % open • ^ archived • …
 SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 1·▾ alpha (7) ● 1 ◐ 1                      │ claude-stopped  ■ stopped
-   ├─ ■ opencode-idle opencode             │ 📁 /tmp/vc-<tmp>
-   ├─ ✕ claude-idle claude                 │ ⏱ <age>
-   ├─ ◐ claude-waiting claude              │  claude   alpha
-  ▶└─ ■ claude-stopped claude              │ ─────────────────────────────── Claude ───────────────────────────────
-    ▾ backend (3) ● 1                      │ Status:  ■ Stopped
-     ├─ ✕ codex-idle codex                 │ Session: <uuid>
-     ├─ ● claude-running claude            │ Model:   tool default
-     └─ ✕ claude-error claude              │ Fork:    f quick fork, F fork with options
-2·▾ beta (4) ◐ 1                           │
-   ├─ ✕ gemini-idle gemini                 │ ─────────────────────────── Process Exited ───────────────────────────
-   ├─ ✕ pi-idle pi                         │
-   ├─ ◐ claude-i18n claude                 │ ■ Process exited
-   └─ ○ shell-live shell                   │
-  ▾ remotes/lab (0) · host down            │ The process ended or was stopped.
+   ├─ ■ opencode-idle                      │ 📁 /tmp/vc-<tmp>
+   ├─ ✕ claude-idle                        │ ⏱ <age> (<date> <time>)
+   ├─ ◐ claude-waiting                     │ 🆔 Deck ID: <id>-<id>
+  ▶└─ ■ claude-stopped                     │  claude   alpha
+    ▾ backend (3) ● 1                      │ ────────────────────────── ▾ Claude @claude ──────────────────────────
+     ├─ ✕ codex-idle                       │ Status:  ■ Stopped
+     ├─ ● claude-running                   │ Session: <uuid>
+     └─ ✕ claude-error                     │ Name:    auto petname — "claude-stopped" after restart
+2·▾ beta (4) ◐ 1                           │ Model:   tool default
+   ├─ ✕ gemini-idle                        │ Fork:    f quick fork, F fork with options
+   ├─ ✕ pi-idle                            │ Copy:    C id/path/branch, c output, V pane
+   ├─ ◐ claude-i18n                        │
+   └─ ○ shell-live                         │ ─────────────────────────── Process Exited ───────────────────────────
+  ▾ remotes/lab (0) · host down            │
+                                           │ ■ Process exited
+                                           │
+                                           │ The process ended or was stopped.
                                            │ The session record is preserved for resuming.
                                            │
                                            │ Actions:
@@ -24,9 +27,6 @@ SESSIONS                                   │ PREVIEW
                                            │   T Fresh   - restart with a new session ID
                                            │   d Delete  - remove from list
                                            │   Enter - attach (will auto-start)
-                                           │
-                                           │
-                                           │
                                            │
                                            │
                                            │

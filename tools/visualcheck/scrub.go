@@ -20,9 +20,10 @@ type scrubRule struct {
 var scrubRules = []scrubRule{
 	{"uuid", regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`), "<uuid>"},
 	{"agent-deck-id", regexp.MustCompile(`\b[0-9a-f]{7,12}\b`), "<id>"},
-	{"semver", regexp.MustCompile(`\bv?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?\b`), "<version>"},
+	{"semver", regexp.MustCompile(`\bv?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?\b`), "<version>"},
 	{"clock-time", regexp.MustCompile(`\b\d{1,2}:\d{2}(:\d{2})?\b`), "<time>"},
 	{"iso-date", regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?\b`), "<date>"},
+	{"calendar-date", regexp.MustCompile(`\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2}\b`), "<date>"},
 	{"relative-age", regexp.MustCompile(`\b\d+(\.\d+)?(s|ms|m|h|d|w)\b`), "<age>"},
 	{"just-now", regexp.MustCompile(`\bjust now\b`), "<age>"},
 	// The attach-shell step's real system-shell prompt embeds the sandbox

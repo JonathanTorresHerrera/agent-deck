@@ -62,6 +62,20 @@ func TestScrubFrameRedactsVolatileText(t *testing.T) {
 	}
 }
 
+func TestScrubVersionBuildMetadata(t *testing.T) {
+	got := scrubFrame("Agent Deck v1.16.22+local.jevslot.1")
+	if got != "Agent Deck <version>" {
+		t.Fatalf("scrubFrame version = %q, want complete build metadata removed", got)
+	}
+}
+
+func TestScrubRenderedCalendarDate(t *testing.T) {
+	got := scrubFrame("⏱ just now (Oct 15 23:59)")
+	if got != "⏱ <age> (<date> <time>)" {
+		t.Fatalf("scrubFrame date = %q, want calendar date normalized", got)
+	}
+}
+
 func TestScrubFrameIsIdempotent(t *testing.T) {
 	in := "v1.2.3 session f47ac10b-58cc-4372-a567-0e02b2c3d479 at 09:15:00, 5m ago, socket vc-999"
 	once := scrubFrame(in)

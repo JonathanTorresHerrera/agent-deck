@@ -1,21 +1,21 @@
  ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 running • ◐ 2 waiting • ○ 1 idle • ■ 2 stopped • ✕ 5 error                      <version>
-  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5   !@#& filter • 0 all • % open • ^ archived • t view • * time
+  All    ● 1   ◐ 2   ○ 1   ■ 2   ✕ 5    C Claude 3 (1▶) · $ shell 1  !@#& filter • 0 all • % open • ^ archived • …
 SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 1·▾ alpha (7) ● 1 ◐ 1                      │ shell-live  ○ idle
-   ├─ ■ opencode-idle opencode             │ 📁 /tmp/vc-<tmp>
-   ├─ ✕ claude-idle claude                 │ ⏱ <age>
-   ├─ ◐ claude-waiting claude              │ 👁️ no viewers
-   └─ ■ claude-stopped claude              │  shell   beta
-    ▾ backend (3) ● 1                      │
-     ├─ ✕ codex-idle codex                 │ ─────────────────────────────── Output ───────────────────────────────
-     ├─ ● claude-running claude            │ $
-     └─ ✕ claude-error claude              │
-2·▾ beta (4) ◐ 1                           │
-   ├─ ✕ gemini-idle gemini                 │
-   ├─ ✕ pi-idle pi                         │
-   ├─ ◐ claude-i18n claude                 │
-  ▶└─ ○ shell-live shell                   │
+   ├─ ■ opencode-idle                      │ 📁 /tmp/vc-<tmp>
+   ├─ ✕ claude-idle                        │ ⏱ <age> (<date> <time>)
+   ├─ ◐ claude-waiting                     │ 🆔 Deck ID: <id>-<id>
+   └─ ■ claude-stopped                     │ 👁️ no viewers
+    ▾ backend (3) ● 1                      │  shell   beta
+     ├─ ✕ codex-idle                       │ Copy:    C id/path/branch, c output, V pane
+     ├─ ● claude-running                   │
+     └─ ✕ claude-error                     │ ────────────────────────────── ▾ Output ──────────────────────────────
+2·▾ beta (4) ◐ 1                           │ $
+   ├─ ✕ gemini-idle                        │
+   ├─ ✕ pi-idle                            │
+   ├─ ◐ claude-i18n                        │
+  ▶└─ ○ shell-live                         │
   ▾ remotes/lab (0) · host down            │
                                            │
                                            │
@@ -37,4 +37,4 @@ SESSIONS                                   │ PREVIEW
                                            │
                                            │
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Session:  ⏎  Attach  n/N  New  g  Grp  R  Restart  H  Shell  c  Copy  V  Copy pane  x  Send …  ↑↓ Nav │ ? Help │ q Quit
+Session:  ⏎  Attach  n/N  New  g  Grp  R  Restart  H  Shell  c  Copy  V  Copy pane …          ↑↓ Nav │ ? Help │ q Quit

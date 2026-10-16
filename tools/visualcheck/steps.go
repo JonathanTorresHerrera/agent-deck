@@ -224,6 +224,16 @@ func stepPreview(w *widthRun) error {
 	if err := w.moveCursorToText("claude-i18n", 40); err != nil {
 		return err
 	}
+	if w.spec.width <= 80 {
+		// The fork's account panel takes the output rows at this width.
+		// The seeded reply remains in the tmux pane; the preview shows the
+		// selected session and its account after the async status settles.
+		if err := waitScreen(w, 5*time.Second, "claude-i18n  ◐ waiting", "Claude @claude"); err != nil {
+			return err
+		}
+		w.capture("02-preview")
+		return nil
+	}
 	if err := w.waitContains(visualCheckI18NReply, 5*time.Second); err != nil {
 		return err
 	}
@@ -284,7 +294,9 @@ func stepGroupView(w *widthRun) error {
 		defer func() { _, _ = w.s.exec("tmux", "kill-session", "-t", name) }()
 	}
 
-	if err := w.s.waitForPaneContains(name, "alpha", 8*time.Second); err != nil {
+	// A second TUI can briefly paint the persisted unscoped selection before
+	// the launch flag takes effect. Wait for the scoped header itself.
+	if err := w.s.waitForPaneContains(name, "Agent Deck [alpha]", 15*time.Second); err != nil {
 		return err
 	}
 	// The scope hides every other root group's rows.

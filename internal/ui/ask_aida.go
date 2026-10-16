@@ -37,6 +37,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
 )
@@ -44,11 +45,11 @@ import (
 // askAidaScriptPath resolves the sender script. A package var so tests point
 // it at a stub in t.TempDir() and never reach ~/.agent-deck.
 var askAidaScriptPath = func() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	legacyDir, err := agentpaths.LegacyDir()
+	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".agent-deck", "bin", "ask-aida.sh")
+	return filepath.Join(legacyDir, "bin", "ask-aida.sh")
 }
 
 // askAidaTimeout bounds one script run. The script caps its own curls under
