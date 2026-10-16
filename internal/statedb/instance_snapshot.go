@@ -20,6 +20,30 @@ type InstanceSnapshot struct {
 	Desired  *InstanceRow
 }
 
+// NativeHarnessSwitchIdentityFromRow builds the CAS identity for an instance
+// row as it exists in the registry right now.
+func NativeHarnessSwitchIdentityFromRow(row *InstanceRow) (NativeHarnessSwitchIdentity, error) {
+	if row == nil {
+		return NativeHarnessSwitchIdentity{}, fmt.Errorf("native switch row is missing")
+	}
+	claudeID, codexID, err := nativeSessionIDs(row.ToolData)
+	if err != nil {
+		return NativeHarnessSwitchIdentity{}, err
+	}
+	return NativeHarnessSwitchIdentity{
+		ID: row.ID, Tool: row.Tool, Account: row.Account, ProjectPath: row.ProjectPath, Command: row.Command,
+		ClaudeSessionID: claudeID, CodexSessionID: codexID, ParentSessionID: row.ParentSessionID,
+	}, nil
+}
+
+func nativeHarnessTargetMatchesRow(row *InstanceRow, claudeID, codexID string, target NativeHarnessSwitchIdentity) bool {
+	if row == nil || row.ID != target.ID {
+		return false
+	}
+	return row.Tool == target.Tool && row.Account == target.Account && row.ProjectPath == target.ProjectPath && row.Command == target.Command &&
+		claudeID == target.ClaudeSessionID && codexID == target.CodexSessionID
+}
+
 // NativeHarnessSwitchIdentity is the deliberately small compare-and-swap
 // boundary for a same-harness lifecycle switch. Status and display metadata
 // are intentionally absent: monitors may update them while the replacement
@@ -160,6 +184,12 @@ func (s *StateDB) commitNativeHarnessSwitchOnce(source, target NativeHarnessSwit
 	claudeID, codexID, err := nativeSessionIDs(current.ToolData)
 	if err != nil {
 		return nil, err
+	}
+	if nativeHarnessTargetMatchesRow(current, claudeID, codexID, target) {
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return nil, err
+		}
+		return current, nil
 	}
 	if current.Tool != source.Tool || current.Account != source.Account || current.ProjectPath != source.ProjectPath || current.Command != source.Command || claudeID != source.ClaudeSessionID || codexID != source.CodexSessionID {
 		return nil, fmt.Errorf("native switch source identity conflict for instance %s", source.ID)

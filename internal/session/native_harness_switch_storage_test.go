@@ -476,6 +476,120 @@ func TestCompletedNativeJournal_AllowsScopedStorageRepairFromExactSource(t *test
 	require.Equal(t, "spare", got[0].Account)
 }
 
+func TestCommitNativeHarnessSwitch_IdempotentWhenRegistryAlreadyAtTarget(t *testing.T) {
+	storage := newTestStorage(t)
+	base := &Instance{ID: "switch-source", Title: "source", ProjectPath: t.TempDir(), GroupPath: "test", Tool: "claude", Command: "claude", Account: "personal", ClaudeSessionID: "native-source", Status: StatusWaiting, CreatedAt: time.Now()}
+	require.NoError(t, storage.Save([]*Instance{base}))
+	inst, err := storage.Load()
+	require.NoError(t, err)
+	result := nativeHarnessCommitResult(inst[0], "spare")
+	inst[0].Account = "spare"
+	require.NoError(t, storage.CommitNativeHarnessSwitch(inst[0], result))
+
+	// A second caller still holding the journal-bound source identity must not
+	// fail once the registry already reflects the target account.
+	stale := nativeHarnessSwitchResult(&HarnessSwitchResult{Committed: true}, result.nativeSource, result.nativeTarget)
+	require.NoError(t, storage.CommitNativeHarnessSwitch(inst[0], stale))
+}
+
+func TestCommitNativeHarnessSwitch_InlineStorageThenTUIPersistDoesNotConflict(t *testing.T) {
+	home := withTempAgentDeckHome(t, `
+[profiles.personal.claude]
+config_dir = "~/.claude-personal"
+[profiles.spare.claude]
+config_dir = "~/.claude-spare"
+`)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	cfg, err := LoadUserConfig()
+	require.NoError(t, err)
+	project := filepath.Join(home, "project")
+	const sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	seed := []byte(`{"sessionId":"` + sid + `","type":"user","message":"inline storage ack"}` + "\n")
+	personal := filepath.Join(home, ".claude-personal", "projects", ConvertToClaudeDirName(project), sid+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(personal), 0o700))
+	require.NoError(t, os.WriteFile(personal, seed, 0o600))
+
+	originalRunning, originalStart := nativeSwitchRunning, nativeSwitchStart
+	t.Cleanup(func() {
+		nativeSwitchRunning, nativeSwitchStart = originalRunning, originalStart
+	})
+	nativeSwitchRunning = func(*Instance) bool { return false }
+	nativeSwitchStart = func(*Instance) error { return nil }
+
+	storage := newTestStorage(t)
+	inst := &Instance{ID: "inline-tui", Title: "source", ProjectPath: project, GroupPath: "test", Tool: "claude", Command: "claude", Account: "personal", ClaudeSessionID: sid, Status: StatusWaiting, CreatedAt: time.Now()}
+	require.NoError(t, storage.Save([]*Instance{inst}))
+
+	result, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{Target: SwitchPreviewTarget{Harness: "claude", Account: "spare"}, NoStart: true, Storage: storage})
+	require.NoError(t, err)
+	require.True(t, result.NativeStorageAlreadyCommitted())
+
+	// Mirrors the TUI's post-lifecycle CommitNativeHarnessSwitch call.
+	require.NoError(t, storage.CommitNativeHarnessSwitch(inst, result))
+	journal, err := loadSwitchJournal(result.nativeJournalPath)
+	require.NoError(t, err)
+	require.Equal(t, switchCompleted, journal.State)
+}
+
+func TestRecoverNativeHarnessSwitch_AcknowledgesCommittedJournal(t *testing.T) {
+	home := withTempAgentDeckHome(t, `
+[profiles.personal.claude]
+config_dir = "~/.claude-personal"
+[profiles.spare.claude]
+config_dir = "~/.claude-spare"
+`)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	cfg, err := LoadUserConfig()
+	require.NoError(t, err)
+	project := filepath.Join(home, "project")
+	const sid = "bbbbbbbb-cccc-dddd-eeee-ffff00000000"
+	seed := []byte(`{"sessionId":"` + sid + `","type":"user","message":"recovery path"}` + "\n")
+	personal := filepath.Join(home, ".claude-personal", "projects", ConvertToClaudeDirName(project), sid+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(personal), 0o700))
+	require.NoError(t, os.WriteFile(personal, seed, 0o600))
+
+	originalRunning, originalStart, originalWrite := nativeSwitchRunning, nativeSwitchStart, harnessSwitchJournalWrite
+	t.Cleanup(func() {
+		nativeSwitchRunning, nativeSwitchStart, harnessSwitchJournalWrite = originalRunning, originalStart, originalWrite
+	})
+	nativeSwitchRunning = func(*Instance) bool { return false }
+	nativeSwitchStart = func(*Instance) error { return nil }
+
+	storage := newTestStorage(t)
+	inst := &Instance{ID: "recover-me", Title: "source", ProjectPath: project, GroupPath: "test", Tool: "claude", Command: "claude", Account: "personal", ClaudeSessionID: sid, Status: StatusWaiting, CreatedAt: time.Now()}
+	require.NoError(t, storage.Save([]*Instance{inst}))
+
+	first, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{Target: SwitchPreviewTarget{Harness: "claude", Account: "spare"}, NoStart: true, Storage: storage})
+	require.NoError(t, err)
+	harnessSwitchJournalWrite = func(path string, journal *switchJournal) error {
+		if journal.State == switchCompleted {
+			return errors.New("injected storage acknowledgement failure")
+		}
+		return originalWrite(path, journal)
+	}
+	require.ErrorContains(t, storage.CommitNativeHarnessSwitch(inst, first), "injected storage acknowledgement failure")
+	harnessSwitchJournalWrite = originalWrite
+
+	reloaded, err := storage.Load()
+	require.NoError(t, err)
+	var target *Instance
+	for _, candidate := range reloaded {
+		if candidate.ID == inst.ID {
+			target = candidate
+		}
+	}
+	require.NotNil(t, target)
+	require.Equal(t, "spare", target.Account)
+
+	recovered, err := RecoverNativeHarnessSwitch(target, storage)
+	require.NoError(t, err)
+	require.Equal(t, "spare", target.Account)
+	require.NotNil(t, recovered)
+	journal, err := loadSwitchJournal(first.nativeJournalPath)
+	require.NoError(t, err)
+	require.Equal(t, switchCompleted, journal.State)
+}
+
 func TestCommitNativeHarnessSwitch_WriteFailureLeavesRecoverableExactMutation(t *testing.T) {
 	storage := newTestStorage(t)
 	base := &Instance{ID: "switch-source", Title: "source", ProjectPath: t.TempDir(), GroupPath: "test", Tool: "claude", Command: "claude", Account: "personal", ClaudeSessionID: "native-source", Status: StatusWaiting, CreatedAt: time.Now()}
