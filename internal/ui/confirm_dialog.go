@@ -336,11 +336,9 @@ func (c *ConfirmDialog) remoteSwitchDetails() string {
 	return out
 }
 
-func displayConfirmAccount(account string) string {
-	if strings.TrimSpace(account) == "" {
-		return "default"
-	}
-	return account
+func displayConfirmAccount(harness, account string) string {
+	cfg, _ := session.LoadUserConfig()
+	return session.AccountSlotSummaryLine(cfg, harness, account)
 }
 
 // ShowSwitchAccount asks before the Edit Session dialog moves a session to
@@ -823,7 +821,7 @@ func (c *ConfirmDialog) View() string {
 		if c.remoteName != "" {
 			title = "Transfer Context on " + c.remoteName + "?"
 		}
-		warning = fmt.Sprintf("%s → NEW %s target (account %s).\n\nThe source stays visible until the target is verified ready; it is then archived as superseded (reversible).", c.sourceSnapshot.tool, c.targetHarness, displayConfirmAccount(c.targetAccount))
+		warning = fmt.Sprintf("%s → NEW %s target (account %s).\n\nThe source stays visible until the target is verified ready; it is then archived as superseded (reversible).", c.sourceSnapshot.tool, c.targetHarness, displayConfirmAccount(c.targetHarness, c.targetAccount))
 		details = "Not transferred:\n• " + c.noticeBody + "\n\nTarget readiness is pending until a target-native identity and ready event are observed."
 		details += c.remoteSwitchDetails()
 		borderColor = ColorYellow
@@ -838,7 +836,7 @@ func (c *ConfirmDialog) View() string {
 		if c.remoteName != "" {
 			title = "Switch Account on " + c.remoteName + "?"
 		}
-		warning = fmt.Sprintf("Move this session to another %s account:\n\n  \"%s\"\n  %s  →  %s", c.targetHarness, c.targetName, displayConfirmAccount(c.switchFrom), displayConfirmAccount(c.targetAccount))
+		warning = fmt.Sprintf("Move this session to another %s account:\n\n  \"%s\"\n  %s  →  %s", c.targetHarness, c.targetName, displayConfirmAccount(c.targetHarness, c.switchFrom), displayConfirmAccount(c.targetHarness, c.targetAccount))
 		details = "• The session is stopped and restarted with its conversation carried over\n• Tools, MCPs, plugins and usage limits follow the new account\n• Authentication is not checked until the restarted harness reports ready"
 		details += c.remoteSwitchDetails()
 		borderColor = ColorYellow
@@ -850,7 +848,7 @@ func (c *ConfirmDialog) View() string {
 
 	case ConfirmArchiveDestinationSwitch:
 		title = "Archive Destination Copy?"
-		warning = fmt.Sprintf("Move this session to another %s account:\n\n  \"%s\"\n  %s  →  %s", c.targetHarness, c.targetName, displayConfirmAccount(c.switchFrom), displayConfirmAccount(c.targetAccount))
+		warning = fmt.Sprintf("Move this session to another %s account:\n\n  \"%s\"\n  %s  →  %s", c.targetHarness, c.targetName, displayConfirmAccount(c.targetHarness, c.switchFrom), displayConfirmAccount(c.targetHarness, c.targetAccount))
 		details = "The target account already has a conversation for this session that is newer or has diverged:\n\n  " + c.noticeBody + "\n\n• Its current copy is archived alongside it as \"<file>.pre-switch-<timestamp>\", never deleted\n• The source conversation is then installed in its place and the switch proceeds"
 		borderColor = ColorRed
 		buttonRow := lipgloss.JoinHorizontal(lipgloss.Center,

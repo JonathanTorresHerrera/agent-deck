@@ -1174,6 +1174,9 @@ func (rc RemoteConfig) GetProfile() string {
 
 // ProfileSettings defines per-profile configuration overrides.
 type ProfileSettings struct {
+	// Label is the human-facing name for this account slot in the TUI and
+	// other pickers. The profile key remains the stable slot id for CLI/TOML.
+	Label string `toml:"label,omitempty"`
 	// Claude defines Claude Code overrides for a specific profile.
 	Claude ProfileClaudeSettings `toml:"claude,omitempty"`
 	// Codex defines Codex CLI overrides for a specific profile.

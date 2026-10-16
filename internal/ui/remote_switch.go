@@ -323,7 +323,7 @@ func (h *Home) handleRemoteSwitchResult(msg remoteSwitchResultMsg) tea.Cmd {
 		if r.TargetID != "" {
 			body += fmt.Sprintf("; new %s target %s created", msg.harness, r.TargetID)
 		} else {
-			body += fmt.Sprintf("; account changed to %q", displayConfirmAccount(msg.account))
+			body += fmt.Sprintf("; account changed to %q", displayConfirmAccount(msg.harness, msg.account))
 		}
 		if r.MissingContract != "" {
 			body += "; waiting for " + r.MissingContract
@@ -342,7 +342,7 @@ func (h *Home) handleRemoteSwitchResult(msg remoteSwitchResultMsg) tea.Cmd {
 			}
 		})
 		body := fmt.Sprintf("on %s: %s/%s → %s/%s (%s); status=%s; readiness=ready%s",
-			msg.remoteName, msg.source.Tool, displayConfirmAccount(r.OldAccount), msg.harness, displayConfirmAccount(r.NewAccount), r.Continuity, presentRemoteStatus(r.Status), took)
+			msg.remoteName, msg.source.Tool, displayConfirmAccount(msg.source.Tool, r.OldAccount), msg.harness, displayConfirmAccount(msg.harness, r.NewAccount), r.Continuity, presentRemoteStatus(r.Status), took)
 		if len(r.LossDisclosure) > 0 {
 			body += "\n\nNot preserved: " + strings.Join(r.LossDisclosure, "; ")
 		}

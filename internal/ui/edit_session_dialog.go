@@ -32,7 +32,10 @@ type editField struct {
 	// pillOptions verbatim as tool pills.
 	pillLabels []string
 	pillCursor int
-	checked    bool
+	// pillSelection is the authoritative chosen value for account pills (slot
+	// id, or "" for inherit). Indices are derived from this when rendering.
+	pillSelection string
+	checked       bool
 }
 
 // EditSessionDialog edits the slim set of session fields users iterate on
@@ -105,15 +108,17 @@ func (d *EditSessionDialog) Show(inst *session.Instance) {
 		// refresh the options below.
 		if len(session.ConfiguredAccountNamesForSwitch(cfg)) > 0 {
 			accounts := session.ConfiguredAccountNamesForHarness(cfg, inst.Tool)
-			opts, labels, cursor := accountPillsForInstance(inst.Account, accounts)
-			d.fields = append(d.fields, editField{
-				key:         session.FieldAccount,
-				label:       accountFieldLabel(inst.Tool),
-				kind:        editFieldPills,
-				pillOptions: opts,
-				pillLabels:  labels,
-				pillCursor:  cursor,
-			})
+			opts, labels, selection := accountPillsForInstance(cfg, inst.Tool, inst.Account, accounts)
+			field := editField{
+				key:           session.FieldAccount,
+				label:         accountFieldLabel(inst.Tool),
+				kind:          editFieldPills,
+				pillOptions:   opts,
+				pillLabels:    labels,
+				pillSelection: selection,
+			}
+			field.syncAccountCursor()
+			d.fields = append(d.fields, field)
 		}
 	}
 	if session.IsClaudeCompatible(inst.Tool) {
@@ -162,31 +167,6 @@ func readClaudeFlags(inst *session.Instance) (skip, auto bool) {
 		return false, false
 	}
 	return cfg.Claude.GetDangerousMode(), cfg.Claude.AutoMode
-}
-
-// accountPillsForInstance returns the account row's options, their display
-// labels, and the cursor for the session's stored slot. Index 0 is always
-// "inherit" (the empty slot, i.e. the conductor/group/env chain).
-//
-// A stored slot whose profile has since been dropped from config.toml is
-// appended as its own pill rather than folded into "inherit" — the same guard
-// toolPillsForInstance applies to an unknown tool, and for the same reason: a
-// save-without-editing must stay a no-op instead of silently rewriting the
-// field to whatever slot 0 happens to be.
-func accountPillsForInstance(account string, accounts []string) (opts, labels []string, cursor int) {
-	opts = append([]string{""}, accounts...)
-	labels = append([]string{"inherit"}, accounts...)
-	for i, name := range accounts {
-		if name == account {
-			return opts, labels, i + 1
-		}
-	}
-	if account != "" {
-		opts = append(opts, account)
-		labels = append(labels, account+" (not configured)")
-		return opts, labels, len(opts) - 1
-	}
-	return opts, labels, 0
 }
 
 // displayGroupName returns the human label for a group path. Mirrors
@@ -265,15 +245,17 @@ func (d *EditSessionDialog) ShowRemote(info session.RemoteSessionInfo, remoteNam
 			pillOptions: tools, pillCursor: toolCursor},
 	}
 	if session.CanonicalSwitchHarnessForUI(info.Tool) != "" {
-		opts, labels, cursor := accountPillsForInstance(info.Account, nil)
-		d.fields = append(d.fields, editField{
-			key:         session.FieldAccount,
-			label:       accountFieldLabel(info.Tool),
-			kind:        editFieldPills,
-			pillOptions: opts,
-			pillLabels:  labels,
-			pillCursor:  cursor,
-		})
+		opts, labels, selection := accountPillsForInstance(nil, info.Tool, info.Account, nil)
+		field := editField{
+			key:           session.FieldAccount,
+			label:         accountFieldLabel(info.Tool),
+			kind:          editFieldPills,
+			pillOptions:   opts,
+			pillLabels:    labels,
+			pillSelection: selection,
+		}
+		field.syncAccountCursor()
+		d.fields = append(d.fields, field)
 	}
 	d.updateFocus()
 }
@@ -350,10 +332,7 @@ func (d *EditSessionDialog) GetChanges(inst *session.Instance) []Change {
 				changes = append(changes, Change{Field: f.key, Value: newVal, IsLive: isLive})
 			}
 		case editFieldPills:
-			if f.pillCursor < 0 || f.pillCursor >= len(f.pillOptions) {
-				continue
-			}
-			newVal := f.pillOptions[f.pillCursor]
+			newVal := f.pillValue()
 			if newVal != fieldInitialValue(inst, f.key) {
 				changes = append(changes, Change{Field: f.key, Value: newVal, IsLive: isLive})
 			}
@@ -442,7 +421,7 @@ func (d *EditSessionDialog) Update(msg tea.Msg) (*EditSessionDialog, tea.Cmd) {
 	}
 
 	switch keyMsg.String() {
-	case "tab", "down":
+	case "tab":
 		if len(d.fields) > 0 {
 			d.focusIndex = (d.focusIndex + 1) % len(d.fields)
 		}
@@ -450,8 +429,23 @@ func (d *EditSessionDialog) Update(msg tea.Msg) (*EditSessionDialog, tea.Cmd) {
 		return d, nil
 
 	case "shift+tab", "up":
+		if d.isAccountFieldFocused() {
+			d.fields[d.focusIndex].stepAccountSelection(-1)
+			return d, nil
+		}
 		if len(d.fields) > 0 {
 			d.focusIndex = (d.focusIndex - 1 + len(d.fields)) % len(d.fields)
+		}
+		d.updateFocus()
+		return d, nil
+
+	case "down":
+		if d.isAccountFieldFocused() {
+			d.fields[d.focusIndex].stepAccountSelection(1)
+			return d, nil
+		}
+		if len(d.fields) > 0 {
+			d.focusIndex = (d.focusIndex + 1) % len(d.fields)
 		}
 		d.updateFocus()
 		return d, nil
@@ -459,6 +453,10 @@ func (d *EditSessionDialog) Update(msg tea.Msg) (*EditSessionDialog, tea.Cmd) {
 	case "left":
 		if d.isPillsFocused() {
 			f := &d.fields[d.focusIndex]
+			if f.key == session.FieldAccount {
+				f.stepAccountSelection(-1)
+				return d, nil
+			}
 			f.pillCursor--
 			if f.pillCursor < 0 {
 				f.pillCursor = len(f.pillOptions) - 1
@@ -472,6 +470,10 @@ func (d *EditSessionDialog) Update(msg tea.Msg) (*EditSessionDialog, tea.Cmd) {
 	case "right":
 		if d.isPillsFocused() {
 			f := &d.fields[d.focusIndex]
+			if f.key == session.FieldAccount {
+				f.stepAccountSelection(1)
+				return d, nil
+			}
 			f.pillCursor = (f.pillCursor + 1) % len(f.pillOptions)
 			if f.key == session.FieldTool {
 				d.refreshTargetAccountPills(f.pillOptions[f.pillCursor])
@@ -513,11 +515,9 @@ func (d *EditSessionDialog) refreshTargetAccountPills(targetHarness string) {
 		if field.key != session.FieldAccount {
 			continue
 		}
-		selected := ""
-		if field.pillCursor >= 0 && field.pillCursor < len(field.pillOptions) {
-			selected = field.pillOptions[field.pillCursor]
-		}
-		opts, labels, cursor := accountPillsForInstance(selected, accounts)
+		selected := field.pillSelection
+		cfg, _ := session.LoadUserConfig()
+		opts, labels, selection := accountPillsForInstance(cfg, targetHarness, selected, accounts)
 		// A slot unavailable on the selected target is not carried forward as
 		// a hidden stale choice; the confirmation/backend receives only a
 		// target-harness configured account or the explicit default.
@@ -527,10 +527,11 @@ func (d *EditSessionDialog) refreshTargetAccountPills(targetHarness string) {
 				found = found || account == selected
 			}
 			if !found {
-				opts, labels, cursor = accountPillsForInstance("", accounts)
+				opts, labels, selection = accountPillsForInstance(cfg, targetHarness, "", accounts)
 			}
 		}
-		field.pillOptions, field.pillLabels, field.pillCursor = opts, labels, cursor
+		field.pillOptions, field.pillLabels, field.pillSelection = opts, labels, selection
+		field.syncAccountCursor()
 		field.label = accountFieldLabel(targetHarness)
 		return
 	}
@@ -608,10 +609,24 @@ func (d *EditSessionDialog) isPillsFocused() bool {
 		len(d.fields[d.focusIndex].pillOptions) > 0
 }
 
+func (d *EditSessionDialog) isAccountFieldFocused() bool {
+	return d.isPillsFocused() && d.fields[d.focusIndex].key == session.FieldAccount
+}
+
+func (f *editField) pillValue() string {
+	if f.key == session.FieldAccount {
+		return f.pillSelection
+	}
+	if f.pillCursor >= 0 && f.pillCursor < len(f.pillOptions) {
+		return f.pillOptions[f.pillCursor]
+	}
+	return ""
+}
+
 func (d *EditSessionDialog) selectedPill(key string) string {
 	for _, field := range d.fields {
-		if field.key == key && field.pillCursor >= 0 && field.pillCursor < len(field.pillOptions) {
-			return field.pillOptions[field.pillCursor]
+		if field.key == key {
+			return field.pillValue()
 		}
 	}
 	return ""
@@ -635,19 +650,17 @@ func (d *EditSessionDialog) switchSummary() string {
 	if !d.hasField(session.FieldAccount) && session.CanonicalSwitchHarnessForUI(targetHarness) == session.CanonicalSwitchHarnessForUI(d.sourceTool) {
 		targetAccount = d.sourceAccount
 	}
-	source := fmt.Sprintf("%s/%s", d.sourceTool, displayEditAccount(d.sourceAccount))
-	target := fmt.Sprintf("%s/%s", targetHarness, displayEditAccount(targetAccount))
+	cfg, _ := session.LoadUserConfig()
+	source := fmt.Sprintf("%s/%s", d.sourceTool, displayEditAccount(cfg, d.sourceTool, d.sourceAccount))
+	target := fmt.Sprintf("%s/%s", targetHarness, displayEditAccount(cfg, targetHarness, targetAccount))
 	if session.CanonicalSwitchHarnessForUI(targetHarness) == session.CanonicalSwitchHarnessForUI(d.sourceTool) {
 		return "Current: " + source + " → " + target + "\nsame-harness resume"
 	}
 	return "Current: " + source + " → NEW " + target + "\nsource kept"
 }
 
-func displayEditAccount(account string) string {
-	if strings.TrimSpace(account) == "" {
-		return "default"
-	}
-	return account
+func displayEditAccount(cfg *session.UserConfig, harness, account string) string {
+	return session.AccountSlotSummaryLine(cfg, harness, account)
 }
 
 func clipEditDialogText(text string, maxRunes int) string {
@@ -740,7 +753,14 @@ func (d *EditSessionDialog) View() string {
 		case editFieldText:
 			content.WriteString(f.input.View())
 		case editFieldPills:
-			if compact && f.pillCursor >= 0 {
+			if f.key == session.FieldAccount && f.pillLabels != nil {
+				f.syncAccountCursor()
+				listWidth := lineWidth - 2
+				if listWidth < 16 {
+					listWidth = 16
+				}
+				content.WriteString(renderAccountPickerList(f.pillLabels, f.pillCursor, listWidth))
+			} else if compact && f.pillCursor >= 0 {
 				if f.pillLabels != nil && f.pillCursor < len(f.pillLabels) {
 					content.WriteString(renderLabelPills([]string{f.pillLabels[f.pillCursor]}, 0))
 				} else if f.pillCursor < len(f.pillOptions) {
