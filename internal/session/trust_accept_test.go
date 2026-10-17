@@ -26,6 +26,14 @@ func TestPathWithinTrustRoots(t *testing.T) {
 		`C:\Users\jonat`:                       false,
 		"relative/path":                        false,
 		"":                                     false,
+		// WO-DECK-SWITCH-SIDECAR-STALE-01: Windows-native Claude also shows
+		// the WSL UNC spelling of a Linux-side path, both backslash- and
+		// forward-slash-separated, and under both wsl.localhost and wsl$.
+		`\\wsl.localhost\Ubuntu\home\jtorres\adk-build\.worktrees\x`: true,
+		`//wsl.localhost/Ubuntu/home/jtorres/adk-build/.worktrees/x`: true,
+		`\\wsl$\Ubuntu\home\jtorres\adk-build\.worktrees\x`:          true,
+		`\\wsl.localhost\Ubuntu\etc\passwd`:                          false, // outside roots even once normalized
+		`\\wsl.localhost\Ubuntu\home\jtorresx`:                       false, // sibling sharing the prefix, UNC form
 	}
 	for p, want := range cases {
 		if got := PathWithinTrustRoots(p, testTrustRoots); got != want {
