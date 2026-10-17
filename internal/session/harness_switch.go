@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -917,49 +918,130 @@ func switchFailedAfterStop(path string, j *switchJournal, inst *Instance, wasRun
 	return nil, cause
 }
 
+// sidecarCopy is one file installStagedDirectory has already classified as
+// safe to copy, decided during the pre-scan before any file is touched.
+type sidecarCopy struct {
+	source, target string
+	// backupStalePrefix is true when target already exists as a strict byte
+	// prefix of source (a leftover from an earlier switch) and must be
+	// archived before source replaces it.
+	backupStalePrefix bool
+}
+
+// installStagedDirectory installs a staged sidecar directory (Claude's
+// companion subagents/ transcripts) without silently clobbering a diverged
+// destination, and without ever failing — or partially installing — one file
+// at a time.
+//
+// Every file is pre-scanned against its destination FIRST: identical files
+// are left alone, a missing destination is copied, and a destination that is
+// a strict byte prefix of the staged source (the same ancestry test
+// installStagedArtifact already applies to the main transcript) is a stale
+// leftover from an earlier switch — it is backed up as
+// "<file>.bak-<YYYYMMDD>" (never clobbering an existing same-day backup) and
+// the source installed in its place. Only once every file has cleared this
+// scan are any files actually written; a genuinely divergent file anywhere in
+// the tree refuses the WHOLE install with one error naming every conflict,
+// so a multi-file sidecar (subagents/agent-1.jsonl, agent-2.jsonl, ...) can
+// never end up with some files advanced and others left stuck mid-switch.
 func installStagedDirectory(stage, destination string) error {
 	if err := ensureNoSymlinkPath(destination); err != nil {
 		return err
 	}
-	return filepath.WalkDir(stage, func(path string, entry os.DirEntry, walkErr error) error {
+	var copies []sidecarCopy
+	var conflicts []string
+	err := filepath.WalkDir(stage, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			return nil
 		}
 		rel, err := filepath.Rel(stage, path)
 		if err != nil {
 			return err
 		}
 		target := filepath.Join(destination, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if !entry.Type().IsRegular() {
+		info, statErr := os.Lstat(target)
+		if os.IsNotExist(statErr) {
+			copies = append(copies, sidecarCopy{source: path, target: target})
 			return nil
 		}
-		if info, statErr := os.Lstat(target); statErr == nil {
-			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-				return fmt.Errorf("refusing sidecar destination: %s", target)
-			}
-			want, hashErr := sha256File(path)
-			if hashErr != nil {
-				return hashErr
-			}
-			got, hashErr := sha256File(target)
-			if hashErr != nil {
-				return hashErr
-			}
-			if got != want {
-				return fmt.Errorf("sidecar destination already differs: %s", target)
-			}
-			return nil
-		} else if !os.IsNotExist(statErr) {
+		if statErr != nil {
 			return statErr
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			conflicts = append(conflicts, fmt.Sprintf("refusing non-regular sidecar destination: %s", target))
+			return nil
+		}
+		want, hashErr := sha256File(path)
+		if hashErr != nil {
+			return hashErr
+		}
+		got, hashErr := sha256File(target)
+		if hashErr != nil {
+			return hashErr
+		}
+		if got == want {
+			return nil
+		}
+		isPrefix, prefixErr := strictBytePrefix(target, path)
+		if prefixErr != nil {
+			return prefixErr
+		}
+		if isPrefix {
+			copies = append(copies, sidecarCopy{source: path, target: target, backupStalePrefix: true})
+			return nil
+		}
+		conflicts = append(conflicts, fmt.Sprintf("sidecar destination already differs: %s", target))
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		return fmt.Errorf("sidecar install refused, %d conflicting file(s) preserved and nothing copied:\n%s", len(conflicts), strings.Join(conflicts, "\n"))
+	}
+	for _, c := range copies {
+		if err := os.MkdirAll(filepath.Dir(c.target), 0o700); err != nil {
 			return err
 		}
-		return copyFileVerified(path, target)
-	})
+		if c.backupStalePrefix {
+			if _, err := backupStaleSidecarFile(c.target); err != nil {
+				return fmt.Errorf("archive stale sidecar destination: %w", err)
+			}
+		}
+		if err := copyFileVerified(c.source, c.target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backupStaleSidecarFile moves an existing sidecar file aside as
+// "<file>.bak-<YYYYMMDD>" before a stale-byte-prefix copy replaces it, so an
+// earlier switch's leftover is archived rather than silently discarded. It
+// never clobbers an existing backup from an earlier switch the same day: a
+// numeric suffix is added instead.
+func backupStaleSidecarFile(target string) (string, error) {
+	stamp := time.Now().UTC().Format("20060102")
+	for n := 0; ; n++ {
+		suffix := stamp
+		if n > 0 {
+			suffix = fmt.Sprintf("%s-%d", stamp, n)
+		}
+		backup := target + ".bak-" + suffix
+		if _, statErr := os.Lstat(backup); statErr == nil {
+			continue
+		} else if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		if err := os.Rename(target, backup); err != nil {
+			return "", err
+		}
+		return backup, nil
+	}
 }
 
 // installStagedArtifact installs an exact staged artifact without silently

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `deck_switch_account` no longer refuses a switch because its sidecar transcript directory (Claude's `subagents/agent-*.jsonl`) holds a stale copy from an earlier switch: every file in the directory is pre-scanned first, an exact byte-prefix destination is archived to `<file>.bak-<YYYYMMDD>` (never clobbering a same-day backup) and advanced automatically, and a genuine conflict across several files is reported together in one error instead of failing on the first file while silently leaving the rest untouched.
+- Composer-readiness detection (used to confirm a Claude pane is idle before a graceful stop or account switch) no longer misses an empty composer when a bordered panel — a background-agent list, or anything else drawn with the same divider style — sits below it: every divider pair is now tried from the bottom of the pane upward instead of only the one nearest the bottom.
+- Claude folder-trust auto-accept now recognizes a WSL UNC path (`\\wsl.localhost\<distro>\...` or `\\wsl$\<distro>\...`, backslash- or forward-slash-separated) as the Linux path it names, so a session whose working directory Claude reports in that form is no longer treated as outside the auto-accept roots.
+
 ## [1.16.22] - 2026-09-28
 
 - **Upgrading:** if you reach `agent-deck web` through a reverse proxy or Tailscale Serve, add its host name to `[web] allowed_hosts` before upgrading (or pass `--allowed-host`); otherwise the web UI answers it with 421.

@@ -328,27 +328,28 @@ func CurrentComposerPrompt(content string) (string, bool) {
 		lines = lines[len(lines)-240:]
 	}
 
-	// Primary path: parse the explicit composer region between the last two
-	// divider lines nearest the bottom of the pane.
-	lastDivider := -1
+	// Primary path: parse the explicit composer region between two divider
+	// lines, trying the pair nearest the bottom of the pane first. A bordered
+	// panel drawn BELOW the real composer — a background-agent summary, or
+	// anything else using the same divider style — can make that nearest
+	// pair the wrong one, enclosing footer text instead of the prompt. Every
+	// consecutive pair of border lines is tried, walking upward, until one
+	// encloses a parseable prompt; this only finds a composer the
+	// single-nearest-pair check would have missed, since that pair is always
+	// tried first.
+	var borders []int
 	for i := len(lines) - 1; i >= 0; i-- {
 		if IsComposerBorderLine(lines[i]) {
-			lastDivider = i
-			break
+			borders = append(borders, i)
 		}
 	}
-	if lastDivider > 0 {
-		prevDivider := -1
-		for i := lastDivider - 1; i >= 0; i-- {
-			if IsComposerBorderLine(lines[i]) {
-				prevDivider = i
-				break
-			}
+	for i := 0; i+1 < len(borders); i++ {
+		lastDivider, prevDivider := borders[i], borders[i+1]
+		if prevDivider+1 >= lastDivider {
+			continue
 		}
-		if prevDivider >= 0 && prevDivider+1 < lastDivider {
-			if body, ok := ParsePromptFromComposerBlock(lines[prevDivider+1 : lastDivider]); ok {
-				return body, true
-			}
+		if body, ok := ParsePromptFromComposerBlock(lines[prevDivider+1 : lastDivider]); ok {
+			return body, true
 		}
 	}
 

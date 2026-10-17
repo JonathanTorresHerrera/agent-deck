@@ -39,13 +39,25 @@ type TrustAcceptResult struct {
 
 var windowsDrivePath = regexp.MustCompile(`^([A-Za-z]):[\\/](.*)$`)
 
+// wslUNCPath matches a WSL UNC path, backslash- or forward-slash-separated,
+// as either \\wsl.localhost\<distro>\... or \\wsl$\<distro>\...: the two
+// spellings Windows-native tools (Claude's own folder-trust dialog among
+// them) use for a path inside the WSL filesystem. Capture group 1 is the
+// distro name (discarded: inside WSL the same tree has no distro prefix) and
+// group 2 is the rest of the path.
+var wslUNCPath = regexp.MustCompile(`(?i)^[\\/]{2}wsl(?:\.localhost|\$)[\\/]([^\\/]+)[\\/](.*)$`)
+
 // PathWithinTrustRoots reports whether p lies inside one of roots, on a path
 // boundary. A Windows spelling ("D:\Dev_Projects\x", what Claude shows when it
-// runs Windows-native) is read as its WSL mount. When p resolves through
+// runs Windows-native) is read as its WSL mount, and a WSL UNC spelling
+// ("\\wsl.localhost\Ubuntu\home\jtorres\x" or its wsl$ / forward-slash
+// variants) is read as the Linux path it names. When p resolves through
 // symlinks, the resolved path must be inside the roots too.
 func PathWithinTrustRoots(p string, roots []string) bool {
 	p = strings.TrimSpace(p)
-	if m := windowsDrivePath.FindStringSubmatch(p); m != nil {
+	if m := wslUNCPath.FindStringSubmatch(p); m != nil {
+		p = "/" + strings.ReplaceAll(m[2], `\`, "/")
+	} else if m := windowsDrivePath.FindStringSubmatch(p); m != nil {
 		p = "/mnt/" + strings.ToLower(m[1]) + "/" + strings.ReplaceAll(m[2], `\`, "/")
 	}
 	if !filepath.IsAbs(p) {
