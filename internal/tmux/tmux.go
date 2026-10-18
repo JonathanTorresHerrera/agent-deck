@@ -196,7 +196,17 @@ func (s *Session) themedStatusRight(themeStyle tmuxThemeStyle) string {
 		stamp = fmt.Sprintf("│ #[fg=%s]prompt %s#[default] ", themeStyle.hintColor, v)
 	}
 
-	return fmt.Sprintf("%s %s│ 📁 %s | %s ", hints, stamp, s.DisplayName, s.projectDisplayName())
+	return fmt.Sprintf("%s %s│ 📁 %s | %s ", hints, stamp, FormatLiteral(s.DisplayName), FormatLiteral(s.projectDisplayName()))
+}
+
+// FormatLiteral escapes text placed into a tmux format string such as
+// status-right, status-left or a display-message. tmux expands "#(cmd)" there by running cmd through the shell
+// on every status refresh, and "#[...]" as style codes; "##" is a literal "#".
+// The session title and the project folder name are not ours to trust (a
+// title can come from an OpenClaw gateway or a web request, a folder from a
+// cloned repository), so every "#" in them is doubled.
+func FormatLiteral(s string) string {
+	return strings.ReplaceAll(s, "#", "##")
 }
 
 func (s *Session) projectDisplayName() string {
@@ -7317,11 +7327,12 @@ func globalEnvironmentValue(socket, key string) (string, error) {
 
 // SetStatusLeft sets the left side of tmux status bar for a session.
 // Used by NotificationManager to display waiting session notifications.
+//
+// text is a tmux format string: callers escape untrusted parts with
+// FormatLiteral. It is passed as one argv element, so no shell quoting.
 func SetStatusLeft(sessionName, text string) error {
-	// Escape single quotes for tmux by replacing ' with '\''
-	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	// Bounded — see tmuxMutationTimeout. Driven by the notification sweep.
-	return runBoundedMutation(DefaultSocketName(), "set-option", "-t", sessionName, "status-left", escaped)
+	return runBoundedMutation(DefaultSocketName(), "set-option", "-t", sessionName, "status-left", text)
 }
 
 // ClearStatusLeft resets status-left to default for a session.
@@ -7357,11 +7368,15 @@ func captureOriginalStatusLeft() {
 // This is a MAJOR performance optimization: ONE tmux call instead of 100+.
 // All agentdeck sessions inherit this global setting.
 // On first call, captures the existing status-left so ClearStatusLeftGlobal can restore it.
+//
+// text is a tmux format string (the bar uses #[fg=...] styles): callers
+// escape untrusted parts such as session titles with FormatLiteral. It is
+// passed as one argv element, so it needs no shell quoting (the former
+// shell-style quote rewrite made tmux show "it's" with backslashes in it).
 func SetStatusLeftGlobal(text string) error {
 	savedStatusLeft.Do(captureOriginalStatusLeft)
-	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	// Bounded — see tmuxMutationTimeout. Driven by the notification sweep.
-	return runBoundedMutation(DefaultSocketName(), "set-option", "-g", "status-left", escaped)
+	return runBoundedMutation(DefaultSocketName(), "set-option", "-g", "status-left", text)
 }
 
 // ClearStatusLeftGlobal restores the original global status-left value.
@@ -7371,9 +7386,9 @@ func SetStatusLeftGlobal(text string) error {
 func ClearStatusLeftGlobal() error {
 	socket := DefaultSocketName()
 	if savedStatusLeft.captured {
-		escaped := strings.ReplaceAll(savedStatusLeft.value, "'", "'\\''")
+		// Restored verbatim: it is the user's own format string.
 		// Bounded — see tmuxMutationTimeout.
-		return runBoundedMutation(socket, "set-option", "-g", "status-left", escaped)
+		return runBoundedMutation(socket, "set-option", "-g", "status-left", savedStatusLeft.value)
 	}
 	// No saved value — fall back to unset (original behavior)
 	return runBoundedMutation(socket, "set-option", "-gu", "status-left")
