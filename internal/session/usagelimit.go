@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -190,6 +191,9 @@ func (r transcriptRecord) fresh(now time.Time, maxAge time.Duration) bool {
 // ok is false when no assistant turn was found within the escalation bound.
 // Callers must treat that as "unknown", never as "fine" — silence being mistaken
 // for health is the failure this whole detector exists to stop.
+// assistantWord is the byte pattern every assistant turn record contains.
+var assistantWord = []byte("assistant")
+
 func latestAssistantTurnIsRateLimited(path string, now time.Time) (limited bool, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -248,6 +252,14 @@ func latestAssistantTurnIsRateLimited(path string, now time.Time) (limited bool,
 		}
 		line := make([]byte, end-start)
 		if _, err := f.ReadAt(line, start); err != nil && err != io.EOF {
+			return false, false, false
+		}
+		// isAssistantTurn needs role or type "assistant", so a line without
+		// that word cannot be one: skip decoding it. Walking back from the
+		// tail this passes over the (often large) tool-result and user
+		// records without a full JSON decode each, which was most of this
+		// scan's cost on every `list --json`.
+		if !bytes.Contains(line, assistantWord) {
 			return false, false, false
 		}
 		trimmed := strings.TrimSpace(string(line))
