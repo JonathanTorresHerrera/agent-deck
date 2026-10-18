@@ -262,7 +262,7 @@ func WriteOpenCodeProjectMCP(projectPath string, enabledNames []string) error {
 		return fmt.Errorf("marshal opencode project mcp: %w", err)
 	}
 	if err := atomicfile.WriteFileWithin(filepath.Dir(mcpFile), mcpFile, newData, 0o600); err != nil {
-		return fmt.Errorf("save opencode project mcp: %w", err)
+		return fmt.Errorf("save opencode project mcp: %w", withProjectMCPOptOut(err))
 	}
 
 	ClearOpenCodeMCPCache(projectPath)
