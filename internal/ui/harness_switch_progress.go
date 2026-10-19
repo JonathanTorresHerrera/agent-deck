@@ -35,7 +35,7 @@ func (h *Home) presentHarnessSwitchProgress(p *session.HarnessSwitchProgress) {
 	case "pending":
 		title = "Account switch pending verification"
 	}
-	h.confirmDialog.ShowNotice(title, p.Text())
+	h.confirmDialog.ShowSwitchNotice(title, p.Text())
 	h.switchProgressSeen[p.InstanceID] = key
 }
 

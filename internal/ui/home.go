@@ -13504,7 +13504,7 @@ func (h *Home) handleConfirmDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case ConfirmNotice:
-		if msg.String() == "c" || msg.String() == "ctrl+c" {
+		if h.confirmDialog.noticeCopyable && (msg.String() == "c" || msg.String() == "ctrl+c") {
 			return h, h.copySwitchNotice()
 		}
 		// Acknowledge-only: any of the usual dismiss keys closes it.

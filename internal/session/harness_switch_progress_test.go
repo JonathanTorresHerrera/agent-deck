@@ -64,4 +64,7 @@ func TestMCPProgressTracksPhasesBeforeAndAfterDeckLifecycle(t *testing.T) {
 	require.Equal(t, "success", p.Status)
 	require.Equal(t, "codex-4", p.FinalAccount)
 	require.Equal(t, "mcp-operation", p.OperationID)
+	for _, step := range p.Steps {
+		require.NotEqual(t, "pending", step.Status, "a successful receipt must finish or skip every step")
+	}
 }

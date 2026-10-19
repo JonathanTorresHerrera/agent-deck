@@ -130,6 +130,10 @@ func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOpt
 		}
 		now := time.Now()
 		for i := range p.Steps {
+			if p.Status == "success" && p.Steps[i].Status == "pending" {
+				p.Steps[i].Status = "skipped"
+				p.Steps[i].CompletedAt = &now
+			}
 			if p.Steps[i].Status == "running" && p.Status == "success" {
 				p.Steps[i].Status = "completed"
 				p.Steps[i].CompletedAt = &now
@@ -332,6 +336,10 @@ func RecordHarnessSwitchProgress(inst *Instance, operationID, targetAccount, ste
 	if status == "success" || status == "failed" {
 		now := time.Now()
 		for i := range p.Steps {
+			if status == "success" && p.Steps[i].Status == "pending" {
+				p.Steps[i].Status = "skipped"
+				p.Steps[i].CompletedAt = &now
+			}
 			if p.Steps[i].Status == "running" {
 				p.Steps[i].Status = "completed"
 				if status == "failed" {
