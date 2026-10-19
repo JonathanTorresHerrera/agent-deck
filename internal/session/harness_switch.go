@@ -18,9 +18,12 @@ import (
 
 // HarnessSwitchOptions is the common execution input for the CLI and TUI.
 type HarnessSwitchOptions struct {
-	Target   SwitchPreviewTarget
-	MaxBytes int
-	NoStart  bool
+	OperationID string
+	Progress    func(HarnessSwitchProgress)
+	progress    *HarnessSwitchProgress
+	Target      SwitchPreviewTarget
+	MaxBytes    int
+	NoStart     bool
 	// Storage, when set, makes ExecuteHarnessSwitch persist the account/native-ID
 	// mutation to the registry itself, in the same operation as the transcript
 	// install, instead of leaving that write to a second caller-side step that
@@ -48,6 +51,7 @@ var ErrSwitchDestinationDivergent = errors.New("destination contains a divergent
 // true only after the destination identity and readiness checks pass (or when
 // the source was already at the requested target and the operation is a retry).
 type HarnessSwitchResult struct {
+	Progress             *HarnessSwitchProgress
 	Preview              *SwitchPreview
 	OldTool              string
 	NewTool              string
@@ -92,19 +96,21 @@ type switchIdentity struct {
 	Tool       string `json:"tool"`
 	// StorageTool preserves the exact configured tool key for the registry CAS;
 	// Tool remains the canonical harness used for switch routing.
-	StorageTool   string    `json:"storage_tool,omitempty"`
-	SessionID     string    `json:"session_id"`
-	ClaudeID      string    `json:"claude_session_id,omitempty"`
-	CodexID       string    `json:"codex_session_id,omitempty"`
-	Account       string    `json:"account"`
-	ProjectPath   string    `json:"project_path"`
-	WorkingDir    string    `json:"working_dir,omitempty"`
-	Title         string    `json:"title"`
-	GroupPath     string    `json:"group_path"`
-	Command       string    `json:"command"`
-	Status        Status    `json:"status"`
-	LastStartedAt time.Time `json:"last_started_at,omitempty"`
-	Generation    string    `json:"generation"`
+	StorageTool     string    `json:"storage_tool,omitempty"`
+	SessionID       string    `json:"session_id"`
+	ClaudeID        string    `json:"claude_session_id,omitempty"`
+	CodexID         string    `json:"codex_session_id,omitempty"`
+	Account         string    `json:"account"`
+	ProjectPath     string    `json:"project_path"`
+	WorkingDir      string    `json:"working_dir,omitempty"`
+	Title           string    `json:"title"`
+	GroupPath       string    `json:"group_path"`
+	Command         string    `json:"command"`
+	Status          Status    `json:"status"`
+	LastStartedAt   time.Time `json:"last_started_at,omitempty"`
+	Generation      string    `json:"generation"`
+	CodexHome       string    `json:"codex_home,omitempty"`
+	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
 }
 
 type switchJournal struct {
@@ -130,26 +136,19 @@ type switchJournal struct {
 	// (before this field existed) remain readable; its zero value means "no
 	// archive happened", which is also correct for their operations.
 	DestinationArchived string `json:"destination_archived,omitempty"`
+	DestinationCreated  bool   `json:"destination_created,omitempty"`
 }
 
 // ExecuteHarnessSwitch is the only mutating account/harness switch entry
 // point. PreviewSwitch is repeated inside the operation lock: a CLI preview
 // and a later TUI/CLI execution must not race a changed registry or artifact.
-func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOptions) (*HarnessSwitchResult, error) {
+func executeHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOptions) (*HarnessSwitchResult, error) {
 	if inst == nil {
 		return nil, fmt.Errorf("session is nil")
 	}
 	if !validSwitchIdentity(inst.ID) {
 		return nil, fmt.Errorf("session id is not a safe switch identity: %q", inst.ID)
 	}
-	// This is deliberately independent of the request journal: A -> B and
-	// A -> C must serialize before either can inspect request-specific state.
-	// Keep it through every preflight, lifecycle, registry, and journal action.
-	sourceLock, err := acquireHarnessSwitchSourceLock(inst.ID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSwitchBusy, err)
-	}
-	defer sourceLock.Release()
 
 	preview := PreviewSwitch(cfg, inst, opts.Target)
 	if preview.Refusal != nil {
@@ -347,6 +346,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 	}
 
 	if wasRunning && nativeSwitchRunning(inst) {
+		setSwitchStep(opts, "waiting_for_idle")
 		if err := nativeSwitchStop(inst); err != nil {
 			return switchFailedOnStop(journalPath, j, inst, wasRunning, fmt.Errorf("stop source before install: %w", err))
 		}
@@ -411,6 +411,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 		j.Failure = "folder trust pre-seed: " + trustErr.Error()
 	}
 	oldAccount := inst.Account
+	setSwitchStep(opts, "switching_account")
 	storageAcknowledged, err := commitNativeSwitchAccount(journalPath, j, inst, preview.TargetAccount, wasRunning, opts.Storage)
 	if err != nil {
 		return nil, err
@@ -424,6 +425,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 	result.nativeJournalPath = journalPath
 	result.nativeStorageAcknowledgement = storageAcknowledged
 	if !opts.NoStart && wasRunning {
+		setSwitchStep(opts, "resuming")
 		if err := startNativeSwitchInstance(inst); err != nil {
 			result.Committed = false
 			inst.Account = oldAccount
@@ -442,6 +444,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 		// evidence. Native account switches have no observer wired into this
 		// transaction, so keep readiness explicitly pending rather than
 		// inferring it from mutable fields or Start success.
+		setSwitchStep(opts, "verifying")
 		result.Restarted = true
 		result.Conversation = "conversation migrated; target start requested; native destination readiness remains pending"
 	}
@@ -452,6 +455,23 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 }
 
 func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPreview, opts HarnessSwitchOptions, journalPath string, journal *switchJournal) (*HarnessSwitchResult, error) {
+	if preview.TargetAccount != inst.Account {
+		setSwitchStep(opts, "resolve_session_id")
+		if err := reconcileCodexSwitchBinding(inst, opts.Storage); err != nil {
+			return nil, fmt.Errorf("resolve Codex session ID: %w", err)
+		}
+		inst.runtimeCodexHome = inst.getCodexHomeDir()
+		preview.SourceSessionID = inst.CodexSessionID
+		if journal == nil {
+			var err error
+			journalPath, err = switchJournalPathForRequest(inst.ID, switchRequestGeneration(identityForInstance(inst), opts.Target, opts.NoStart))
+			if err != nil {
+				return nil, err
+			}
+		} else if journal.Source.CodexID != inst.CodexSessionID {
+			return nil, fmt.Errorf("Codex session ID changed during incomplete switch; inspect journal %s", journalPath)
+		}
+	}
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration is unavailable; target Codex account cannot be validated")
 	}
@@ -478,6 +498,12 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	if j == nil {
 		j = &switchJournal{Version: switchJournalVersion, OperationID: switchOperationIDForRequest(inst.ID, switchRequestGeneration(identityForInstance(inst), opts.Target, opts.NoStart)), State: switchPrepared, Source: identityForInstance(inst), Target: targetIdentityFor(inst, preview), WasRunning: wasRunning, NoStart: opts.NoStart,
 			RequestGeneration: switchRequestGeneration(identityForInstance(inst), opts.Target, opts.NoStart)}
+	}
+	j.Target.CodexHome = ExpandPath(targetHome)
+	if opts.progress != nil {
+		j.OperationID = opts.progress.OperationID
+		opts.progress.JournalPath = journalPath
+		opts.progress.Warnings = append(opts.progress.Warnings, codexSwitchHookWarnings(inst.getCodexHomeDir(), targetHome)...)
 	}
 	j.SourcePath, j.SourceSHA256 = sourcePath, sourceHash
 	// The prepared receipt is the first durable boundary. Do not create a
@@ -518,12 +544,14 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 		return nil, err
 	}
 	if wasRunning && nativeSwitchRunning(inst) {
+		setSwitchStep(opts, "waiting_for_idle")
 		if err := nativeSwitchStop(inst); err != nil {
 			return switchFailedOnStop(journalPath, j, inst, wasRunning, err)
 		}
 	}
 	// The first staged copy is provisional. Re-export after the synchronous stop
 	// so normal-exit flushes are included in the exact final rollout.
+	setSwitchStep(opts, "resolve_session_id")
 	if wasRunning {
 		finalExport, exportErr := ExportCodexContext(inst, 0)
 		if exportErr != nil {
@@ -550,6 +578,8 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	}
 	destination := filepath.Join(ExpandPath(targetHome), rel)
 	j.Destination = destination
+	_, destinationStatErr := os.Lstat(destination)
+	j.DestinationCreated = os.IsNotExist(destinationStatErr)
 	archived, err := installStagedArtifact(stagePath, destination, sourceHash, opts.ArchiveDestination)
 	if err != nil {
 		if wasRunning {
@@ -567,6 +597,7 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	}
 	oldAccount := inst.Account
 	oldIdentity := identityForInstance(inst)
+	setSwitchStep(opts, "switching_account")
 	storageAcknowledged, err := commitNativeSwitchAccount(journalPath, j, inst, preview.TargetAccount, wasRunning, opts.Storage)
 	if err != nil {
 		return nil, err
@@ -575,9 +606,13 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 	result.nativeJournalPath = journalPath
 	result.nativeStorageAcknowledgement = storageAcknowledged
 	if !opts.NoStart && wasRunning {
+		setSwitchStep(opts, "resuming")
 		if err := startNativeSwitchInstance(inst); err != nil {
 			result.Committed = false
 			restoreSwitchIdentity(inst, oldIdentity, oldIdentity.Command)
+			if cleanupErr := cleanupFailedCodexInstall(j); cleanupErr != nil {
+				err = fmt.Errorf("%w; cleanup: %v", err, cleanupErr)
+			}
 			storageErr := revertNativeSwitchStorage(opts.Storage, inst, storageAcknowledged, j.Target, j.Source)
 			var rollbackErr error
 			if storageErr == nil {
@@ -601,8 +636,32 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 		// A successful Start is not an observed Codex thread event. Keep this
 		// native switch pending until an observer can provide fresh exact
 		// evidence; never promote assigned fields to readiness evidence.
+		setSwitchStep(opts, "verifying")
 		result.Restarted = true
 		result.Conversation = "Codex rollout migrated; target start requested; native destination readiness remains pending"
+		if inst.tmuxSession != nil {
+			deadline := time.Now().Add(15 * time.Second)
+			for time.Now().Before(deadline) {
+				if observeNativeCodexResume(inst, j.Source.CodexID, targetHome) {
+					raw, captureErr := inst.tmuxSession.CapturePaneFresh()
+					ready, reason := switchComposerReady(raw, "codex")
+					if captureErr != nil || !ready {
+						result.Conversation = "Target account process owns the exact conversation, but verification is pending: " + reason + "; inspect hook trust and the target composer"
+						time.Sleep(200 * time.Millisecond)
+						continue
+					}
+
+					result.DestinationReady, j.DestinationReady, j.TargetObserved = true, true, true
+					result.Conversation = "Exact Codex conversation resumed by the new process in the target account home"
+					if err := writeSwitchJournal(journalPath, j); err != nil {
+						return result, err
+					}
+					break
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+
 	}
 	// The lifecycle journal remains committed until the caller's scoped storage
 	// CAS succeeds and completeNativeHarnessSwitchJournal durably acknowledges
@@ -774,6 +833,9 @@ func commitNativeSwitchAccount(path string, j *switchJournal, inst *Instance, ac
 		return false, fmt.Errorf("native switch commit is missing source identity")
 	}
 	inst.Account = account
+	if IsCodexCompatible(inst.Tool) {
+		inst.runtimeCodexHome = j.Target.CodexHome
+	}
 	j.State = switchCommitted
 	if err := harnessSwitchJournalWrite(path, j); err != nil {
 		returnCause := fmt.Errorf("persist native switch commit: %w", err)
@@ -903,6 +965,9 @@ func switchFailedAfterStop(path string, j *switchJournal, inst *Instance, wasRun
 	// the target identity. Restoration is independent of lifecycle state; only
 	// restarting is conditional on a source that was running before the switch.
 	restoreSwitchIdentity(inst, j.Source, j.Source.Command)
+	if cleanupErr := cleanupFailedCodexInstall(j); cleanupErr != nil {
+		cause = fmt.Errorf("%w; cleanup: %v", cause, cleanupErr)
+	}
 	var restoreErr error
 	if wasRunning {
 		restoreErr = startNativeSwitchInstance(inst)
@@ -1408,6 +1473,12 @@ func restoreSwitchIdentity(inst *Instance, old switchIdentity, oldCommand string
 		return
 	}
 	inst.Tool, inst.Account, inst.Command = old.Tool, old.Account, oldCommand
+	if old.StorageTool != "" {
+		inst.Tool = old.StorageTool
+	}
+	inst.runtimeCodexHome = old.CodexHome
+	inst.CodexDetectedAt = old.CodexDetectedAt
+	inst.LastStartedAt, inst.Status = old.LastStartedAt, old.Status
 	inst.ProjectPath, inst.Title, inst.GroupPath = old.ProjectPath, old.Title, old.GroupPath
 	inst.ClaudeSessionID, inst.CodexSessionID = old.ClaudeID, old.CodexID
 	if inst.ClaudeSessionID == "" && inst.CodexSessionID == "" {
@@ -1428,7 +1499,11 @@ func identityForInstance(inst *Instance) switchIdentity {
 	if tool == "" {
 		tool = strings.ToLower(strings.TrimSpace(inst.Tool))
 	}
-	return switchIdentity{InstanceID: inst.ID, Tool: tool, StorageTool: inst.Tool, SessionID: resolveSourceSessionID(inst), ClaudeID: inst.ClaudeSessionID, CodexID: inst.CodexSessionID, Account: strings.TrimSpace(inst.Account), ProjectPath: canonicalSwitchPath(inst.ProjectPath), WorkingDir: canonicalSwitchPath(inst.EffectiveWorkingDir()), Title: inst.Title, GroupPath: inst.GroupPath, Command: inst.Command, Status: inst.Status, LastStartedAt: inst.LastStartedAt}
+	codexHome := ""
+	if IsCodexCompatible(inst.Tool) {
+		codexHome = inst.getCodexHomeDir()
+	}
+	return switchIdentity{CodexHome: codexHome, CodexDetectedAt: inst.CodexDetectedAt, InstanceID: inst.ID, Tool: tool, StorageTool: inst.Tool, SessionID: resolveSourceSessionID(inst), ClaudeID: inst.ClaudeSessionID, CodexID: inst.CodexSessionID, Account: strings.TrimSpace(inst.Account), ProjectPath: canonicalSwitchPath(inst.ProjectPath), WorkingDir: canonicalSwitchPath(inst.EffectiveWorkingDir()), Title: inst.Title, GroupPath: inst.GroupPath, Command: inst.Command, Status: inst.Status, LastStartedAt: inst.LastStartedAt}
 }
 
 func canonicalSwitchPath(path string) string {

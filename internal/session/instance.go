@@ -315,10 +315,12 @@ type Instance struct {
 	lastOpenCodeScanAt time.Time // Rate-limits OpenCode session-discovery scans
 
 	// Codex CLI integration
-	CodexSessionID  string    `json:"codex_session_id,omitempty"`
-	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
-	CodexStartedAt  int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
-	lastCodexScanAt time.Time // Rate-limits expensive ~/.codex/sessions scans
+	CodexSessionID           string    `json:"codex_session_id,omitempty"`
+	CodexDetectedAt          time.Time `json:"codex_detected_at,omitempty"`
+	CodexStartedAt           int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
+	lastCodexScanAt          time.Time // Rate-limits expensive ~/.codex/sessions scans
+	runtimeCodexHome         string    // Exact source home pinned during a native switch/rollback.
+	lastCodexIdentityRefresh time.Time
 	// Usage-limit detection (#1802), all guarded by i.mu.
 	// lastUsageLimitScanAt throttles the transcript read (records scan START).
 	// usageLimitedCached memoises the verdict for that window, and
@@ -2429,8 +2431,14 @@ func (i *Instance) accountCodexHomeDir() string {
 // #1922 failure — the account was recorded and reported, but the process ran
 // against ~/.codex.
 func (i *Instance) codexHomeToExport() string {
+	if i.runtimeCodexHome != "" {
+		return i.runtimeCodexHome
+	}
 	if accountHome := strings.TrimSpace(i.accountCodexHomeDir()); accountHome != "" {
 		return accountHome
+	}
+	if i.defaultCodexHome() != getCodexHomeDir() {
+		return i.defaultCodexHome()
 	}
 	if isCodexHomeExplicit() {
 		return strings.TrimSpace(getCodexHomeDir())
@@ -2452,6 +2460,9 @@ func (i *Instance) codexHomeToExport() string {
 // it under the ACCOUNT home, so the gate always missed, dropped the session id,
 // and every restart silently opened a fresh conversation.
 func (i *Instance) codexHomeForCommand(command string) string {
+	if i.runtimeCodexHome != "" {
+		return i.runtimeCodexHome
+	}
 	// A CODEX_HOME= embedded in the command is the user typing it by hand for
 	// this session, so it stays the most explicit signal of all — and the shell
 	// agrees, since it is emitted after any exported CODEX_HOME.
@@ -2461,12 +2472,15 @@ func (i *Instance) codexHomeForCommand(command string) string {
 	if accountHome := strings.TrimSpace(i.accountCodexHomeDir()); accountHome != "" {
 		return accountHome
 	}
-	return getCodexHomeDir()
+	return i.defaultCodexHome()
 }
 
 func (i *Instance) getCodexHomeDir() string {
 	if i == nil {
 		return getCodexHomeDir()
+	}
+	if i.runtimeCodexHome != "" {
+		return i.runtimeCodexHome
 	}
 	return i.codexHomeForCommand(i.resolveCodexCommand(i.Command))
 }
@@ -2477,6 +2491,9 @@ func (i *Instance) getCodexHomeDir() string {
 func (i *Instance) ResolvedCodexHome() string {
 	if i == nil || !IsCodexCompatible(i.Tool) || strings.TrimSpace(i.SSHHost) != "" {
 		return ""
+	}
+	if home := codexProcessHome(i); home != "" {
+		return home
 	}
 	return i.getCodexHomeDir()
 }
@@ -4152,11 +4169,21 @@ func (i *Instance) updateCodexSessionForPass(excludeIDs map[string]bool, forcePr
 		return ""
 	}
 
+	// Rotation must be checked before a stale tmux binding can short-circuit
+	// detection. The bounded rollout scan requires this launch's cwd and time.
+	if id, err := resolveCurrentCodexIdentity(i, excludeIDs); err == nil {
+		i.CodexSessionID, i.CodexDetectedAt = id, time.Now()
+		i.recordCodexOwnership(id)
+		if i.tmuxSession != nil {
+			_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", id)
+		}
+		return ""
+	}
 	envSessionID := ""
 
 	// 1. Try to read from tmux environment first (authoritative if set)
 	if i.tmuxSession != nil {
-		if sessionID, err := i.tmuxSession.GetEnvironment("CODEX_SESSION_ID"); err == nil && sessionID != "" {
+		if sessionID, err := i.tmuxSession.GetEnvironment("CODEX_SESSION_ID"); err == nil && sessionID != "" && !i.shouldRejectCodexSubagentRebind(sessionID) {
 			envSessionID = sessionID
 			if i.CodexSessionID != sessionID {
 				i.CodexSessionID = sessionID
@@ -6375,6 +6402,13 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 	defer i.persistLastActivity(false)
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if syncMetadata && IsCodexCompatible(i.Tool) && i.Status != StatusStopped && time.Since(i.lastCodexIdentityRefresh) >= 2*time.Second {
+		i.lastCodexIdentityRefresh = time.Now()
+		if id, err := resolveCurrentCodexIdentity(i, cachedCodexPeerIDs(i)); err == nil && id != i.CodexSessionID {
+			i.CodexSessionID, i.CodexDetectedAt = id, time.Now()
+			i.recordCodexOwnership(id)
+		}
+	}
 
 	// Short grace period for tmux initialization (not Claude startup)
 	// Use lastStartTime for accuracy on restarts, fallback to CreatedAt

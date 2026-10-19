@@ -106,6 +106,8 @@ func handleSession(profile string, args []string) {
 		handleSessionSwitchAccount(profile, args[1:])
 	case "switch":
 		handleSessionSwitch(profile, args[1:])
+	case "switch-progress":
+		handleSessionSwitchProgress(profile, args[1:])
 	case "switch-preview":
 		handleSessionSwitchPreview(profile, args[1:])
 	case "move", "mv":

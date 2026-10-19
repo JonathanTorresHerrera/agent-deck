@@ -327,3 +327,33 @@ func TestAccountSwitchDivergentDestinationOffersArchiveAction(t *testing.T) {
 		}
 	}
 }
+
+func TestSwitchProgressSurvivesRestartAndPresentsTerminalReceipt(t *testing.T) {
+	h := NewHome()
+	p := &session.HarnessSwitchProgress{InstanceID: "fixture", OperationID: "operation-123", Title: "Aida fixture", TargetAccount: "codex-4", FinalAccount: "codex-4", Status: "running", Sequence: 1,
+		Steps:   []session.HarnessSwitchStep{{ID: "stopping", Name: "Stopping (graceful exit)", Status: "running"}},
+		LogPath: "/logs/harness-switch.jsonl", JournalPath: "/runtime/switch.json", ProgressPath: "/runtime/progress.json", LatestLogEntry: `{"operation_id":"operation-123","seq":1}`}
+	h.presentHarnessSwitchProgress(p)
+	if !h.confirmDialog.IsVisible() || !strings.Contains(h.confirmDialog.noticeBody, "Stopping (graceful exit)") {
+		t.Fatal("running switch is invisible")
+	}
+	// The status receipt is independent of the instance/pane and survives its
+	// replacement by a storage watcher during a restart.
+	h.instanceByID = map[string]*session.Instance{}
+	p.Status = "success"
+	p.Sequence++
+	h.presentHarnessSwitchProgress(p)
+	if !strings.Contains(h.confirmDialog.noticeBody, "Switched Aida fixture to codex-4") {
+		t.Fatalf("success missing named account: %s", h.confirmDialog.noticeBody)
+	}
+	p.Status = "failed"
+	p.FailedStep = "verifying"
+	p.Reason = "Hooks need review"
+	p.Sequence++
+	h.presentHarnessSwitchProgress(p)
+	for _, want := range []string{"operation-123", "Hooks need review", "/logs/harness-switch.jsonl", `"seq":1`} {
+		if !strings.Contains(h.confirmDialog.noticeBody, want) {
+			t.Fatalf("missing copyable diagnostic %q", want)
+		}
+	}
+}

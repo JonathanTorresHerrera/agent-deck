@@ -77,8 +77,9 @@ type ConfirmDialog struct {
 	windowID    string // Tmux window id (e.g. "@12") captured when the dialog opened, for ConfirmKillWindow.
 
 	// Notice (ConfirmNotice) carries an acknowledge-only title/body.
-	noticeTitle string
-	noticeBody  string
+	noticeTitle    string
+	noticeBody     string
+	noticeCopyable bool
 
 	// focusedButton tracks which button has arrow-key focus.
 	// 0 = confirm (left), 1 = cancel (right).
@@ -443,10 +444,18 @@ func (c *ConfirmDialog) ShowNotice(title, body string) {
 	c.confirmType = ConfirmNotice
 	c.noticeTitle = title
 	c.noticeBody = body
+	c.noticeCopyable = false
 	c.targetID = ""
 	c.targetName = ""
 	c.buttonCount = 1
 	c.focusedButton = 0
+}
+
+// ShowSwitchNotice keeps full switch receipts copyable without changing
+// unrelated notice layouts or keyboard behavior.
+func (c *ConfirmDialog) ShowSwitchNotice(title, body string) {
+	c.ShowNotice(title, body)
+	c.noticeCopyable = true
 }
 
 // ShowQuitWithPool shows confirmation for quitting with MCP pool running
@@ -541,6 +550,7 @@ func (c *ConfirmDialog) Hide() {
 	c.remoteName = ""
 	c.noticeTitle = ""
 	c.noticeBody = ""
+	c.noticeCopyable = false
 	c.hookEvents = nil
 }
 
@@ -865,7 +875,7 @@ func (c *ConfirmDialog) View() string {
 		borderColor = ColorYellow
 		buttons = lipgloss.JoinVertical(lipgloss.Left,
 			renderButton("OK", ColorAccent, true),
-			hintStyle.Render("Enter / Esc / o dismiss"))
+			hintStyle.Render(noticeCopyHint(c.noticeCopyable)))
 
 	case ConfirmInstallHooks:
 		title = "Claude Code Hooks"
@@ -986,4 +996,11 @@ func glueGroups(hint, sep string) string {
 		groups[i] = strings.ReplaceAll(g, " ", nbsp)
 	}
 	return strings.Join(groups, sep)
+}
+
+func noticeCopyHint(copyable bool) string {
+	if copyable {
+		return "Enter / Esc / o dismiss · c copy full text"
+	}
+	return "Enter / Esc / o dismiss"
 }

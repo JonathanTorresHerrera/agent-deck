@@ -49,3 +49,13 @@ func TestReadinessPresentation(t *testing.T) {
 		t.Fatalf("ready presentation = %q, want ready", got)
 	}
 }
+
+func TestNativeSwitchPayloadIncludesProgressDiagnostics(t *testing.T) {
+	progress := &session.HarnessSwitchProgress{OperationID: "op", Status: "failed", FailedStep: "resolve_session_id", Reason: "ambiguous", FinalAccount: "", LogPath: "/logs/switch.jsonl", LatestLogEntry: `{"seq":7}`, Steps: []session.HarnessSwitchStep{{ID: "resolve_session_id", Status: "failed"}}}
+	payload := nativeSwitchProgressPayload(progress)
+	for _, key := range []string{"steps", "operation_id", "final_account", "failed_step", "reason", "latest_log_entry", "log_path"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("missing MCP/CLI field %s", key)
+		}
+	}
+}

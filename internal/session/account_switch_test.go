@@ -102,6 +102,13 @@ config_dir = "~/.codex-work"
 	const sid = "11111111-2222-3333-4444-555555555555"
 	sourceHome := filepath.Join(home, ".codex-work")
 	seedCodex155Rollout(t, sourceHome, sid, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	// This switch is scoped to the instance cwd. Keep the realistic 1.55
+	// history fixture, but give its metadata this test's own project path.
+	fixturePath := codexRolloutPathInHome(sid, sourceHome)
+	fixture, err := os.ReadFile(fixturePath)
+	require.NoError(t, err)
+	fixture = []byte(strings.ReplaceAll(string(fixture), "/tmp/sb-codex", filepath.Join(home, "project")))
+	require.NoError(t, os.WriteFile(fixturePath, fixture, 0600))
 	inst := &Instance{ID: "codex-named-to-default", Title: "source", ProjectPath: filepath.Join(home, "project"),
 		Tool: "codex", Command: "codex", Account: "work", CodexSessionID: sid, Status: StatusStopped, CreatedAt: time.Now()}
 	preview := PreviewSwitch(cfg, inst, SwitchPreviewTarget{Harness: "codex", Account: ""})
