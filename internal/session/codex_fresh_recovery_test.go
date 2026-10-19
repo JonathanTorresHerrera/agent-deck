@@ -149,8 +149,11 @@ func TestFreshCodexSwitchChecksTheLiveSourceHome(t *testing.T) {
 	stubCodexPaneOpenPaths(t, []string{p}, nil)
 	cfg := &UserConfig{Profiles: map[string]ProfileSettings{"work": {Codex: ProfileCodexSettings{ConfigDir: filepath.Join(home, "work")}}}}
 	inst := &Instance{ID: "live-home-history", Tool: "codex", Command: "codex", ProjectPath: cwd}
-	_, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{Target: SwitchPreviewTarget{Harness: "codex", Account: "work"}, NoStart: true})
-	require.ErrorContains(t, err, "without an exact Codex session ID")
-	require.Empty(t, inst.Account)
-	require.NoFileExists(t, filepath.Join(home, "work", "sessions"))
+	result, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{Target: SwitchPreviewTarget{Harness: "codex", Account: "work"}, NoStart: true})
+	require.NoError(t, err)
+	require.False(t, result.FreshSession, "a live main rollout must migrate rather than restart blank")
+	require.Equal(t, id, inst.CodexSessionID)
+	require.Equal(t, "work", inst.Account)
+	require.FileExists(t, result.DestinationPath)
+	require.Contains(t, result.DestinationPath, filepath.Join(home, "work", "sessions"))
 }

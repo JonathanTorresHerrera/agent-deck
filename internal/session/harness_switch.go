@@ -473,7 +473,8 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 		if !history && inst.CodexDetectedAt.IsZero() {
 			return executeFreshCodexSwitch(inst, preview, opts, journalPath, journal)
 		}
-		return nil, fmt.Errorf("refusing Codex native switch without an exact Codex session ID: main-thread history exists")
+		// History must use the existing exact-ID resolver. It may recover an
+		// authoritative process-owned main thread; failure still refuses.
 	}
 	if preview.TargetAccount != inst.Account {
 		setSwitchStep(opts, "resolve_session_id")
