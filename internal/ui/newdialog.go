@@ -384,6 +384,8 @@ type dialogSnapshot struct {
 	claudeOptions    *session.ClaudeOptions
 	geminiYolo       bool
 	codexYolo        bool
+	codexAccount     string
+	claudeAccount    string
 	hermesYolo       bool
 	multiRepoEnabled bool
 	multiRepoPaths   []string
@@ -631,6 +633,8 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string, conduc
 	d.pathSoftSelected = true // activate soft-select for pre-filled path.
 	// Initialize tool options from global config.
 	d.geminiOptions.SetDefaults(false)
+	d.codexOptions.SetAccounts(nil)
+	d.codexOptions.SetAccount("")
 	d.codexOptions.SetDefaults(false)
 	d.hermesOptions.SetDefaults(false)
 	d.ompOptions.SetDefaults(nil)
@@ -640,6 +644,11 @@ func (d *NewDialog) ShowInGroup(groupPath, groupName, defaultPath string, conduc
 		d.hermesOptions.SetDefaults(userConfig.Hermes.YoloMode)
 		d.ompOptions.SetDefaults(session.NewOMPOptions(userConfig))
 		d.claudeOptions.SetDefaults(userConfig)
+		d.codexOptions.SetAccounts(session.ConfiguredCodexAccountNames(userConfig))
+		d.codexOptions.SetAccount(session.JevDefaultAccount("codex"))
+		meters := jevEditMeters()
+		d.claudeOptions.accountLabels = jevNewAccountLabels("claude", d.claudeOptions.accounts, meters)
+		d.codexOptions.accountLabels = jevNewAccountLabels("codex", d.codexOptions.accounts, meters)
 		d.sandboxEnabled = userConfig.Docker.DefaultEnabled
 		d.worktreeEnabled = userConfig.Worktree.DefaultEnabled
 		if d.worktreeEnabled {
@@ -947,6 +956,8 @@ func (d *NewDialog) saveSnapshot() *dialogSnapshot {
 		claudeOptions:    claudeOpts,
 		geminiYolo:       d.geminiOptions.GetYoloMode(),
 		codexYolo:        d.codexOptions.GetYoloMode(),
+		codexAccount:     d.GetCodexAccount(),
+		claudeAccount:    d.claudeOptions.GetAccount(),
 		hermesYolo:       d.hermesOptions.GetYoloMode(),
 		multiRepoEnabled: d.multiRepoEnabled,
 		multiRepoPaths:   append([]string{}, d.multiRepoPaths...),
@@ -972,6 +983,8 @@ func (d *NewDialog) restoreSnapshot(s *dialogSnapshot) {
 	}
 	d.geminiOptions.SetDefaults(s.geminiYolo)
 	d.codexOptions.SetDefaults(s.codexYolo)
+	d.codexOptions.SetAccount(s.codexAccount)
+	d.claudeOptions.SetAccount(s.claudeAccount)
 	d.hermesOptions.SetDefaults(s.hermesYolo)
 	d.multiRepoEnabled = s.multiRepoEnabled
 	d.multiRepoPaths = append([]string{}, s.multiRepoPaths...)
@@ -1527,9 +1540,10 @@ func (d *NewDialog) GetClaudeStartQuery() string {
 	return d.claudeOptions.GetStartQuery()
 }
 
-// GetClaudeAccount returns the named account slot picked in the options
-// panel (#924), or "" when the session should inherit the existing
-// conductor/group/env chain. Assigned by the caller to Instance.Account.
+// GetCodexAccount returns the profile key selected for a Codex launch.
+func (d *NewDialog) GetCodexAccount() string { return d.codexOptions.GetAccount() }
+
+// GetClaudeAccount returns the selected Claude profile key, or inherit.
 func (d *NewDialog) GetClaudeAccount() string {
 	if !d.isClaudeSelected() {
 		return ""
@@ -1577,6 +1591,7 @@ func (d *NewDialog) ResetRemoteDefaults() {
 	d.claudeOptions.SetFromOptions(&session.ClaudeOptions{SessionMode: "new"})
 	d.claudeOptions.SetExtraArgs(nil)
 	d.claudeOptions.SetAccounts(nil)
+	d.codexOptions.SetAccounts(nil)
 	d.geminiOptions.SetDefaults(false)
 	d.codexOptions.SetDefaults(false)
 	d.hermesOptions.SetDefaults(false)
@@ -1716,6 +1731,7 @@ func (d *NewDialog) GetRemoteCreateOptions() (session.RemoteAddOptions, string) 
 		}
 		opts.ExtraArgs = d.GetClaudeExtraArgs()
 	case d.toolKind(command) == "codex":
+		opts.Account = d.GetCodexAccount()
 		opts.Yolo = d.GetCodexYoloMode()
 	case command == "gemini":
 		opts.Yolo = d.IsGeminiYoloMode()
@@ -3915,6 +3931,8 @@ func (d *NewDialog) SetRemoteCreationCatalog(catalog *session.RemoteCreationCata
 	// any tool was even chosen. Leaving it empty shows the same "tool
 	// default (↓ to browse)" placeholder the local dialog shows.
 	d.SetRemoteAccounts(catalog.Accounts)
+	d.codexOptions.SetAccounts(catalog.CodexAccounts)
+	d.codexOptions.SetAccount("")
 	d.SetRemoteMCPs(catalog.MCPs)
 	d.conductorSessions = nil
 	for _, parent := range catalog.Conductors {

@@ -16,6 +16,7 @@ import (
 // Jev owns the ordering, identity and meter. Its status command reads metadata
 // only; the Deck account value stays the stable profile key after renumbering.
 type jevEditMeter struct {
+	DisplayName string `json:"displayName"`
 	Slot        string `json:"slot"`
 	Provider    string `json:"provider"`
 	DeckAccount string `json:"deckAccount"`
@@ -123,4 +124,59 @@ func jevSafeEmail(email string) string {
 		}
 		return r
 	}, email)
+}
+
+// Labels use only Jev's public metadata; profile keys remain launch values.
+func jevNewAccountLabels(provider string, accounts []string, meters []jevEditMeter) []string {
+	labels := accountPillLabels(accounts)
+	for _, m := range meters {
+		if m.Provider != provider {
+			continue
+		}
+		index := -1
+		if m.DeckAccount == "" {
+			index = 0
+		} else {
+			for i, a := range accounts {
+				if a == m.DeckAccount {
+					index = i + 1
+					break
+				}
+			}
+		}
+		if index < 0 {
+			continue
+		}
+		name := m.DisplayName
+		if name == "" {
+			name = m.Slot
+		}
+		name = jevSafeEmail(name)
+		if m.Identity.Email != "" {
+			name += " · " + jevSafeEmail(m.Identity.Email)
+		}
+		if index == 0 {
+			labels[index] = "inherit/default · " + name
+		} else {
+			labels[index] = name
+		}
+	}
+	return labels
+}
+
+// Public identity labels are long. Give each choice its own logical row so
+// the form viewport can keep the selected account visible on small terminals.
+func renderNewAccountChoices(labels []string, cursor int, vertical bool) string {
+	if !vertical {
+		return "    " + renderLabelPills(labels, cursor) + "\n"
+	}
+	var b strings.Builder
+	for i, label := range labels {
+		selected := -1
+		if i == cursor {
+			selected = 0
+		}
+		b.WriteString("    " + renderLabelPills([]string{label}, selected) + "\n")
+	}
+	return b.String()
 }

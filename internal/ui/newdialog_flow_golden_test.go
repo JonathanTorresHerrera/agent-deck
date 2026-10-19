@@ -56,7 +56,26 @@ func TestNewSessionFlow_Golden(t *testing.T) {
 			d.claudeOptions.FocusLast()
 		}},
 		{"05-create-button", func(t *testing.T, d *NewDialog) { flowFocus(t, d, focusCreate) }},
+		{"06-codex-account-row", func(t *testing.T, d *NewDialog) {
+			d.SetDefaultTool("codex")
+			d.codexOptions.SetDefaults(false)
+			d.codexOptions.SetAccounts([]string{"codex-key-a", "codex-key-b"})
+			d.codexOptions.accountLabels = []string{"inherit/default", "codex-1 · dev@example.test", "codex-2 · ops@example.test"}
+			d.codexOptions.SetAccount("codex-key-a")
+			d.rebuildFocusTargets()
+			flowFocus(t, d, focusOptions)
+			d.codexOptions.FocusLast()
+		}},
 	}
+	steps = append(steps, struct {
+		name  string
+		setup func(*testing.T, *NewDialog)
+	}{"07-claude-account-identities", func(t *testing.T, d *NewDialog) {
+		d.claudeOptions.accountLabels = []string{"inherit/default", "claude-1 · dev@example.test", "claude-2 · ops@example.test"}
+		d.claudeOptions.SetAccount("work")
+		flowFocus(t, d, focusOptions)
+		d.claudeOptions.FocusLast()
+	}})
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
 			d := goldenDialog(t)

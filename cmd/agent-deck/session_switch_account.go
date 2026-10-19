@@ -19,7 +19,8 @@ import (
 // Session dialog; this handler only parses flags, resolves the session,
 // persists the result and renders output.
 func handleSessionSwitchAccount(profile string, args []string) {
-	fs := flag.NewFlagSet("session switch-account", flag.ExitOnError)
+	fs := flag.NewFlagSet("session switch-account", flag.ContinueOnError)
+	trigger := fs.String("trigger", "", "Switch origin: cli or rotator")
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	quiet := fs.Bool("quiet", false, "Minimal output")
 	quietShort := fs.Bool("q", false, "Minimal output (short)")
@@ -54,10 +55,16 @@ func handleSessionSwitchAccount(profile string, args []string) {
 	}
 
 	if err := fs.Parse(normalizeArgs(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		logged := session.RecordSwitchFailure(nil, session.SwitchPreviewTarget{Account: fs.Arg(1)}, *trigger, "parse", err)
+		NewCLIOutput(*jsonOutput, false).ErrorWithData(logged.Error(), ErrCodeInvalidOperation, map[string]any{"attempt_id": session.SwitchAttemptID(logged)})
 		os.Exit(1)
 	}
 	if fs.NArg() < 2 {
-		fs.Usage()
+		logged := session.RecordSwitchFailure(nil, session.SwitchPreviewTarget{Account: fs.Arg(1)}, *trigger, "parse", fmt.Errorf("requires a session ID/title and target account"))
+		NewCLIOutput(*jsonOutput, false).ErrorWithData(logged.Error(), ErrCodeInvalidOperation, map[string]any{"attempt_id": session.SwitchAttemptID(logged)})
 		os.Exit(1)
 	}
 
@@ -70,12 +77,14 @@ func handleSessionSwitchAccount(profile string, args []string) {
 
 	storage, instances, _, err := loadSessionData(profile)
 	if err != nil {
-		out.Error(err.Error(), ErrCodeNotFound)
+		logged := session.RecordSwitchFailure(&session.Instance{ID: identifier}, session.SwitchPreviewTarget{Account: account}, *trigger, "load_session", err)
+		out.ErrorWithData(logged.Error(), ErrCodeNotFound, map[string]any{"attempt_id": session.SwitchAttemptID(logged)})
 		os.Exit(1)
 	}
 	inst, errMsg, errCode := ResolveSession(identifier, instances)
 	if inst == nil {
-		out.Error(errMsg, errCode)
+		logged := session.RecordSwitchFailure(&session.Instance{ID: identifier}, session.SwitchPreviewTarget{Account: account}, *trigger, "resolve_session", fmt.Errorf("%s", errMsg))
+		out.ErrorWithData(logged.Error(), errCode, map[string]any{"attempt_id": session.SwitchAttemptID(logged)})
 		if errCode == ErrCodeNotFound {
 			os.Exit(2)
 		}
@@ -84,6 +93,7 @@ func handleSessionSwitchAccount(profile string, args []string) {
 	}
 
 	result, switchErr := session.SwitchAccount(userConfig, inst, account, session.AccountSwitchOptions{
+		Trigger:            *trigger,
 		NoRestart:          *noRestart,
 		Storage:            storage,
 		ArchiveDestination: *archiveDestination,
@@ -95,7 +105,7 @@ func handleSessionSwitchAccount(profile string, args []string) {
 		if errors.Is(switchErr, session.ErrSwitchDestinationDivergent) {
 			message += "; re-run with --archive-destination to archive it and switch anyway"
 		}
-		out.Error(message, ErrCodeInvalidOperation)
+		out.ErrorWithData(message, ErrCodeInvalidOperation, map[string]any{"attempt_id": session.SwitchAttemptID(switchErr)})
 		os.Exit(1)
 	}
 	for _, warning := range result.Warnings {
@@ -103,7 +113,8 @@ func handleSessionSwitchAccount(profile string, args []string) {
 	}
 
 	if err := session.CommitAccountSwitch(storage, inst, result); err != nil {
-		out.Error(fmt.Sprintf("failed to save session state: %v", err), ErrCodeInvalidOperation)
+		logged := &session.SwitchAttemptError{AttemptID: result.AttemptID, Cause: fmt.Errorf("failed to save session state: %w", err)}
+		out.ErrorWithData(logged.Error(), ErrCodeInvalidOperation, map[string]any{"attempt_id": result.AttemptID})
 		os.Exit(1)
 	}
 
@@ -121,6 +132,7 @@ func handleSessionSwitchAccount(profile string, args []string) {
 
 	out.Success(fmt.Sprintf("Switched %s: account %q -> %q; %s", inst.Title, result.OldAccount, result.NewAccount, result.Conversation),
 		map[string]interface{}{
+			"attempt_id":           result.AttemptID,
 			"success":              true,
 			"id":                   inst.ID,
 			"title":                inst.Title,

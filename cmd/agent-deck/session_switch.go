@@ -18,7 +18,9 @@ import (
 // the TUI. It never infers an account or harness: both are explicit (an empty
 // value means the target default only where the preview says that is valid).
 func handleSessionSwitch(profile string, args []string) {
-	fs := flag.NewFlagSet("session switch", flag.ExitOnError)
+	fs := flag.NewFlagSet("session switch", flag.ContinueOnError)
+	attemptID := fs.String("attempt-id", "", "External MCP attempt receipt ID (MCP owns the terminal log entry)")
+	trigger := fs.String("trigger", "", "Switch origin: cli, mcp or rotator")
 	operationID := fs.String("operation-id", "", "Correlate an existing MCP progress receipt")
 	toHarness := fs.String("to-harness", "", "Target harness (claude, codex, pi, …); empty keeps the source harness")
 	toAccount := fs.String("to-account", "", "Target configured account slot; empty means the target default")
@@ -39,26 +41,42 @@ func handleSessionSwitch(profile string, args []string) {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(normalizeArgs(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		logged := session.RecordSwitchFailure(nil, session.SwitchPreviewTarget{Harness: *toHarness, Account: *toAccount}, *trigger, "parse", err)
+		NewCLIOutput(*jsonOutput, false).ErrorWithData(logged.Error(), ErrCodeInvalidOperation, map[string]any{"attempt_id": session.SwitchAttemptID(logged)})
 		os.Exit(1)
 	}
 	if fs.NArg() < 1 {
-		fs.Usage()
+		logged := session.RecordSwitchFailure(nil, session.SwitchPreviewTarget{Harness: *toHarness, Account: *toAccount}, *trigger, "parse", fmt.Errorf("requires a session ID or title"))
+		NewCLIOutput(*jsonOutput, false).ErrorWithData(logged.Error(), ErrCodeInvalidOperation, map[string]any{"attempt_id": session.SwitchAttemptID(logged)})
 		os.Exit(1)
 	}
 	out := NewCLIOutput(*jsonOutput, false)
+	recordFailure := func(inst *session.Instance, target session.SwitchPreviewTarget, step string, cause error) error {
+		if *attemptID != "" {
+			return &session.SwitchAttemptError{AttemptID: *attemptID, Cause: cause}
+		}
+		return session.RecordSwitchFailure(inst, target, *trigger, step, cause)
+	}
+
+	printFailure := func(cause error, code string) {
+		out.ErrorWithData(cause.Error(), code, map[string]any{"attempt_id": session.SwitchAttemptID(cause)})
+	}
 	storage, instances, _, err := loadSessionData(profile)
 	if err != nil {
-		out.Error(err.Error(), ErrCodeNotFound)
+		printFailure(recordFailure(nil, session.SwitchPreviewTarget{Harness: *toHarness, Account: *toAccount}, "load_session", err), ErrCodeNotFound)
 		os.Exit(1)
 	}
 	inst, errMsg, errCode := ResolveSession(fs.Arg(0), instances)
 	if inst == nil {
-		out.Error(errMsg, errCode)
+		printFailure(recordFailure(&session.Instance{ID: fs.Arg(0)}, session.SwitchPreviewTarget{Harness: *toHarness, Account: *toAccount}, "resolve_session", fmt.Errorf("%s", errMsg)), errCode)
 		os.Exit(1)
 	}
 	cfg, cfgErr := session.LoadUserConfig()
 	if cfgErr != nil {
-		out.Error(fmt.Sprintf("load config: %v", cfgErr), ErrCodeInvalidOperation)
+		printFailure(recordFailure(inst, session.SwitchPreviewTarget{Harness: *toHarness, Account: *toAccount}, "load_config", cfgErr), ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
 	target := session.SwitchPreviewTarget{Harness: strings.TrimSpace(*toHarness), Account: strings.TrimSpace(*toAccount)}
@@ -69,11 +87,11 @@ func handleSessionSwitch(profile string, args []string) {
 	var switchErr error
 	if preview.Execution == session.ExecutionPlanned && preview.Refusal == nil {
 		if !*confirmContextLoss {
-			out.Error("cross-harness transfer is lossy; review `session switch-preview` and repeat with --confirm-context-loss", ErrCodeInvalidOperation)
+			printFailure(recordFailure(inst, target, "confirmation", fmt.Errorf("cross-harness transfer is lossy; review `session switch-preview` and repeat with --confirm-context-loss")), ErrCodeInvalidOperation)
 			os.Exit(1)
 		}
 		crossResult, switchErr = session.ExecuteCrossHarnessSwitch(context.Background(), cfg, inst, session.CrossHarnessSwitchOptions{
-			Target: target, MaxBytes: *maxBytes, NoStart: *noStart, SourceSnapshot: &sourceSnapshot,
+			AttemptID: *attemptID, Trigger: *trigger, Target: target, MaxBytes: *maxBytes, NoStart: *noStart, SourceSnapshot: &sourceSnapshot,
 		}, session.CrossHarnessSwitchDependencies{
 			Store:           session.StorageCrossHarnessTargetStore{Storage: storage},
 			Lifecycle:       session.InstanceCrossHarnessLifecycle{},
@@ -82,7 +100,7 @@ func handleSessionSwitch(profile string, args []string) {
 		})
 	} else {
 		result, switchErr = session.ExecuteHarnessSwitch(cfg, inst, session.HarnessSwitchOptions{
-			OperationID: *operationID, Target: target, MaxBytes: *maxBytes, NoStart: *noStart,
+			AttemptID: *attemptID, Trigger: *trigger, OperationID: *operationID, Target: target, MaxBytes: *maxBytes, NoStart: *noStart,
 			Storage: storage, ArchiveDestination: *archiveDestination,
 		})
 	}
@@ -90,7 +108,9 @@ func handleSessionSwitch(profile string, args []string) {
 		if switchErr == nil {
 			switchErr = fmt.Errorf("switch failed without a result")
 		}
-		out.ErrorWithData(switchErr.Error(), ErrCodeInvalidOperation, nativeSwitchProgressPayload(session.HarnessSwitchProgressFor(result, switchErr)))
+		data := nativeSwitchProgressPayload(session.HarnessSwitchProgressFor(result, switchErr))
+		data["attempt_id"] = session.SwitchAttemptID(switchErr)
+		out.ErrorWithData(switchErr.Error(), ErrCodeInvalidOperation, data)
 		os.Exit(1)
 	}
 	if switchErr != nil {
@@ -118,6 +138,7 @@ func handleSessionSwitch(profile string, args []string) {
 			}
 		} else if *jsonOutput {
 			data := nativeSwitchProgressPayload(session.HarnessSwitchProgressFor(result, switchErr))
+			data["attempt_id"] = session.SwitchAttemptID(switchErr)
 			data["status"], data["pending"], data["committed"], data["recovery_required"] = "failed", false, result != nil && result.Committed, result != nil && result.Committed
 			data["archive_destination_available"] = errors.Is(switchErr, session.ErrSwitchDestinationDivergent)
 			out.ErrorWithData(switchErr.Error(), ErrCodeInvalidOperation, data)
@@ -140,6 +161,7 @@ func handleSessionSwitch(profile string, args []string) {
 	}
 	if crossResult != nil {
 		payload := crossHarnessSuccessPayload(inst, crossResult)
+		payload["attempt_id"] = crossResult.AttemptID
 		if *jsonOutput {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetEscapeHTML(false)
@@ -150,12 +172,12 @@ func handleSessionSwitch(profile string, args []string) {
 		return
 	}
 	if err := storage.CommitNativeHarnessSwitch(inst, result); err != nil {
-		out.Error(fmt.Sprintf("save switched session: %v", err), ErrCodeInvalidOperation)
+		printFailure(&session.SwitchAttemptError{AttemptID: result.AttemptID, Cause: fmt.Errorf("save switched session: %w", err)}, ErrCodeInvalidOperation)
 		os.Exit(1)
 	}
 	payload := map[string]any{
 		"success": result.Committed && result.DestinationReady, "status": switchPresentationStatus(result.Committed, result.DestinationReady), "pending": result.Committed && !result.DestinationReady,
-		"id": inst.ID, "title": inst.Title, "native_session_id": nativeSwitchSessionID(inst),
+		"attempt_id": result.AttemptID, "fresh_session": result.FreshSession, "conversation": result.Conversation, "id": inst.ID, "title": inst.Title, "native_session_id": nativeSwitchSessionID(inst),
 		"old_tool": result.OldTool, "new_tool": result.NewTool,
 		"old_account": result.OldAccount, "new_account": result.NewAccount,
 		"continuity": result.Continuity, "source_sha256": result.SourceArtifactSHA256,
@@ -265,7 +287,7 @@ func crossHarnessTargetID(result *session.CrossHarnessSwitchResult) string {
 // a recovery-required failure after that point still reports the archive.
 func crossHarnessResultFields(inst *session.Instance, r *session.CrossHarnessSwitchResult) map[string]any {
 	return map[string]any{
-		"operation_id": r.OperationID, "target_id": crossHarnessTargetID(r),
+		"attempt_id": r.AttemptID, "operation_id": r.OperationID, "target_id": crossHarnessTargetID(r),
 		"target_created": r.TargetCreated, "target_started": r.TargetStarted, "target_ready": r.TargetReady,
 		"missing_contract": r.MissingContract, "configured_account": r.ConfiguredAccount,
 		"authentication": r.Authentication, "context_delivery": r.ContextDelivery,

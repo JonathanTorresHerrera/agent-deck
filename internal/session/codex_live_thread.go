@@ -84,12 +84,17 @@ func (i *Instance) LiveCodexThreadID() string {
 	owned := ""
 	for _, path := range paths {
 		id := extractCodexSessionIDFromPath(path)
+		if id != "" {
+			if head, ok := readCodexRolloutHead(path); ok && head.Subagent {
+				continue
+			}
+		}
 		if id == "" && strings.HasPrefix(path, lockDir) {
 			if m := codexThreadWriterLockPathRE.FindStringSubmatch(path); m != nil {
 				id = m[1]
 			}
 		}
-		if id == "" {
+		if id == "" || CodexSubagentThread(id, i.getCodexHomeDir()) {
 			continue
 		}
 		if owned != "" && owned != id {

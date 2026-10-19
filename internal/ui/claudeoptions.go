@@ -35,7 +35,8 @@ type ClaudeOptionsPanel struct {
 	// Named Claude account slots (#924) configured as
 	// [profiles.<name>.claude].config_dir, sorted. Empty means the machine
 	// has no named accounts and the row is hidden entirely.
-	accounts []string
+	accounts      []string
+	accountLabels []string
 	// accountCursor indexes accounts+1: 0 selects "inherit" (no per-session
 	// slot, i.e. the conductor/group/env chain), i+1 selects accounts[i].
 	accountCursor int
@@ -104,6 +105,7 @@ func (p *ClaudeOptionsPanel) SetDefaults(config *session.UserConfig) {
 		p.useChrome = config.Claude.UseChrome
 		p.useTeammateMode = config.Claude.UseTeammateMode
 		p.SetAccounts(session.ConfiguredAccountNames(config))
+		p.SetAccount(session.JevDefaultAccount("claude"))
 	}
 }
 
@@ -112,6 +114,7 @@ func (p *ClaudeOptionsPanel) SetDefaults(config *session.UserConfig) {
 // login never sees a control it cannot use.
 func (p *ClaudeOptionsPanel) SetAccounts(accounts []string) {
 	p.accounts = accounts
+	p.accountLabels = nil
 	if p.accountCursor > len(accounts) {
 		p.accountCursor = 0
 	}
@@ -276,6 +279,9 @@ func (p *ClaudeOptionsPanel) FocusedLine() int {
 		if p.focusIndex > autoIndex {
 			line++
 		}
+	}
+	if p.getFocusType() == "account" && len(p.accountLabels) == len(p.accounts)+1 {
+		line += 1 + p.accountCursor
 	}
 	return line
 }
@@ -652,7 +658,11 @@ func (p *ClaudeOptionsPanel) viewNewMode(labelStyle, activeStyle, dimStyle, head
 		if p.focusIndex == focusIdx {
 			label = activeStyle.Render("  ▶ Account:")
 		}
-		content += label + "\n    " + renderLabelPills(accountPillLabels(p.accounts), p.accountCursor) + "\n"
+		labels := p.accountLabels
+		if len(labels) != len(p.accounts)+1 {
+			labels = accountPillLabels(p.accounts)
+		}
+		content += label + "\n" + renderNewAccountChoices(labels, p.accountCursor, p.accountLabels != nil)
 	}
 
 	return content

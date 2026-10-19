@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -158,6 +159,9 @@ func readCodexRolloutThreadMeta(path string) codexThreadMeta {
 		if err := json.Unmarshal(head.Payload.Source, &src); err == nil {
 			meta.ParentThreadID = src.Subagent.ThreadSpawn.ParentThreadID
 		}
+	}
+	if meta.ParentThreadID != "" || bytes.Contains(head.Payload.Source, []byte(`"subagent"`)) {
+		meta.ThreadSource = "subagent"
 	}
 	return meta
 }

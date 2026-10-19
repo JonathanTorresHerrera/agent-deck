@@ -73,10 +73,13 @@ type CrossHarnessTargetEvidence struct {
 }
 
 type CrossHarnessSwitchOptions struct {
-	Target   SwitchPreviewTarget
-	MaxBytes int
-	NoStart  bool
-	Timeout  time.Duration
+	AttemptID string
+	attempt   *SwitchAttempt
+	Trigger   string
+	Target    SwitchPreviewTarget
+	MaxBytes  int
+	NoStart   bool
+	Timeout   time.Duration
 	// SourceSnapshot is retained for preview compatibility only. Execution
 	// ignores it and requires SourceOwnership to re-read current state.
 	SourceSnapshot *SwitchSourceSnapshot
@@ -157,6 +160,7 @@ func (s StorageCrossHarnessTargetStore) FinalizeTargetHandoff(source, target *In
 }
 
 type CrossHarnessSwitchResult struct {
+	AttemptID       string
 	Preview         *SwitchPreview
 	Target          *Instance
 	OperationID     string
@@ -222,7 +226,36 @@ type crossHarnessJournal struct {
 // the source instance, process, transcript, account, children, and routing.
 // It never reports completion from mutable target fields: completion requires
 // independent target-native evidence from Observer.
-func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Instance, opts CrossHarnessSwitchOptions, deps CrossHarnessSwitchDependencies) (*CrossHarnessSwitchResult, error) {
+func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Instance, opts CrossHarnessSwitchOptions, deps CrossHarnessSwitchDependencies) (result *CrossHarnessSwitchResult, err error) {
+	attempt := NewSwitchAttempt(source, opts.Target, opts.Trigger)
+	external := opts.AttemptID != ""
+	if external {
+		attempt.ID = opts.AttemptID
+	}
+	defer func() {
+		outcome, step := "pending", attempt.Step
+		if result != nil {
+			result.AttemptID = attempt.ID
+			if result.TargetReady {
+				outcome = "success"
+			}
+		}
+		if err != nil && !(result != nil && result.Pending && errors.Is(err, ErrCrossHarnessPending) && !errors.Is(err, ErrCrossHarnessRecoveryRequired)) {
+			outcome = "failed"
+		}
+		if external {
+			if err != nil {
+				err = &SwitchAttemptError{AttemptID: attempt.ID, Cause: err}
+			}
+		} else {
+			err = attempt.Finish(outcome, step, err)
+		}
+	}()
+	opts.attempt = attempt
+	return executeCrossHarnessSwitch(ctx, cfg, source, opts, deps)
+}
+
+func executeCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Instance, opts CrossHarnessSwitchOptions, deps CrossHarnessSwitchDependencies) (*CrossHarnessSwitchResult, error) {
 	if source == nil {
 		return nil, fmt.Errorf("session is nil")
 	}
@@ -282,6 +315,7 @@ func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Ins
 	}
 	// Re-export at execution time. A preview's in-memory prompt is not an
 	// authority to mutate later and must never be persisted in the journal.
+	opts.attempt.Step = "exporting"
 	plan, err := BuildFreshTargetLaunchPlanForInstance(cfg, source, opts.Target, opts.MaxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("exact source export for target failed: %w", err)
@@ -299,6 +333,7 @@ func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Ins
 	// The target receives an immutable, operation-bound file rather than the
 	// raw JSONL or an enormous shell-quoted command. Stage it before recording
 	// the launch binding so the journal and lifecycle share its exact path/hash.
+	opts.attempt.Step = "staging"
 	if err := stageCrossHarnessPayload(plan); err != nil {
 		return nil, err
 	}
@@ -333,6 +368,7 @@ func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Ins
 		ConfiguredAccount: configuredCrossHarnessAccount(plan.Target), Authentication: "unverified",
 		ContextDelivery: "not-delivered", SemanticAcceptance: "pending",
 	}
+	opts.attempt.Step = "creating_target"
 	target, err := deps.Store.LoadTarget(plan.Target.InstanceID)
 	if err != nil {
 		return failCrossHarness(journalPath, journal, result, fmt.Errorf("load target %q: %w", plan.Target.InstanceID, err))
@@ -386,6 +422,7 @@ func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Ins
 			return nil, err
 		}
 		uncertainLaunch = true
+		opts.attempt.Step = "starting_target"
 		if err := deps.Lifecycle.StartTarget(ctx, target, plan); err != nil {
 			journal.Failure = "launch result uncertain: " + err.Error()
 			if writeErr := writeCrossHarnessJournal(journalPath, journal); writeErr != nil {
@@ -416,6 +453,7 @@ func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Ins
 	if restorer, ok := deps.Observer.(CrossHarnessTargetObservationJournaler); ok && !journal.Observation.StartedAt.IsZero() {
 		restorer.RestoreTargetObservation(target, journal.Observation)
 	}
+	opts.attempt.Step = "verifying"
 	evidence, observeErr := deps.Observer.ObserveTarget(ctx, target, plan.Target)
 	if observeErr != nil {
 		contract := missingTargetContract(plan.Target.Tool) + ": " + observeErr.Error()
@@ -466,6 +504,7 @@ func ExecuteCrossHarnessSwitch(ctx context.Context, cfg *UserConfig, source *Ins
 	if _, err := validateSourceOwnership(); err != nil {
 		return pendingCrossHarness(journalPath, journal, result, err.Error())
 	}
+	opts.attempt.Step = "committing"
 	if err := deps.Store.FinalizeTargetHandoff(source, target); err != nil {
 		return pendingCrossHarness(journalPath, journal, result, "atomic source/target supersession pending: "+err.Error())
 	}

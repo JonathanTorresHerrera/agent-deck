@@ -15,6 +15,7 @@ var (
 
 type AccountSwitchOptions struct {
 	NoRestart bool
+	Trigger   string
 	// Storage, when set, makes the switch persist the account mutation to the
 	// registry as part of this same operation instead of requiring the
 	// caller's separate CommitAccountSwitch step to be the only place that
@@ -27,6 +28,7 @@ type AccountSwitchOptions struct {
 }
 
 type AccountSwitchResult struct {
+	AttemptID    string
 	OldAccount   string
 	NewAccount   string
 	MigratedPath string
@@ -66,7 +68,7 @@ func ConfiguredAccountNames(cfg *UserConfig) []string {
 // destination verification before committing the account field.
 func SwitchAccount(cfg *UserConfig, inst *Instance, account string, opts AccountSwitchOptions) (*AccountSwitchResult, error) {
 	if inst == nil {
-		return nil, errors.New("no session")
+		return nil, RecordSwitchFailure(nil, SwitchPreviewTarget{Account: account}, opts.Trigger, "preflight", errors.New("no session"))
 	}
 	// Preserve the account-only API's sentinel errors while the shared
 	// executor remains the single mutation path.
@@ -76,9 +78,10 @@ func SwitchAccount(cfg *UserConfig, inst *Instance, account string, opts Account
 		if preview.Refusal.Code == "unknown-account" {
 			sentinel = ErrUnknownAccount
 		}
-		return nil, fmt.Errorf("%w: %s", sentinel, preview.Refusal.Message)
+		return nil, RecordSwitchFailure(inst, SwitchPreviewTarget{Harness: inst.Tool, Account: account}, opts.Trigger, "preflight", fmt.Errorf("%w: %s", sentinel, preview.Refusal.Message))
 	}
 	result, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{
+		Trigger:            opts.Trigger,
 		Target:             SwitchPreviewTarget{Harness: inst.Tool, Account: account},
 		NoStart:            opts.NoRestart,
 		Storage:            opts.Storage,
@@ -98,6 +101,7 @@ func SwitchAccount(cfg *UserConfig, inst *Instance, account string, opts Account
 		conversation = "no conversation to migrate (fresh session)"
 	}
 	return &AccountSwitchResult{
+		AttemptID:           result.AttemptID,
 		OldAccount:          result.OldAccount,
 		NewAccount:          result.NewAccount,
 		MigratedPath:        result.DestinationPath,

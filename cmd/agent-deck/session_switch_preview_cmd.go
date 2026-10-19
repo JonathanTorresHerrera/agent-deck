@@ -126,12 +126,13 @@ type switchPreviewJSONOutput struct {
 	TargetAccountDir    string `json:"target_account_dir"`
 	TargetAccountStatus string `json:"target_account_status"`
 
-	Capability        string                         `json:"capability"`
-	ProgressSupported bool                           `json:"progress_supported"`
-	Execution         string                         `json:"execution"`
-	Inclusions        []string                       `json:"fidelity_inclusions"`
-	Exclusions        []string                       `json:"fidelity_exclusions"`
-	LaunchPlan        *session.FreshTargetLaunchPlan `json:"launch_plan,omitempty"`
+	Capability              string                         `json:"capability"`
+	AttemptLoggingSupported bool                           `json:"attempt_logging_supported"`
+	ProgressSupported       bool                           `json:"progress_supported"`
+	Execution               string                         `json:"execution"`
+	Inclusions              []string                       `json:"fidelity_inclusions"`
+	Exclusions              []string                       `json:"fidelity_exclusions"`
+	LaunchPlan              *session.FreshTargetLaunchPlan `json:"launch_plan,omitempty"`
 
 	Refusal  *switchPreviewRefusalJSON `json:"refusal,omitempty"`
 	Warnings []string                  `json:"warnings,omitempty"`
@@ -147,15 +148,16 @@ type switchPreviewRefusalJSON struct {
 
 func printSwitchPreviewJSON(preview *session.SwitchPreview, maxChars int) {
 	out := &switchPreviewJSONOutput{
-		ProgressSupported:   preview.Capability == session.CapabilityNativeResume,
-		SourceTitle:         preview.SourceTitle,
-		SourceTool:          preview.SourceTool,
-		SourceAccount:       preview.SourceAccount,
-		SourceAccountDir:    preview.SourceAccountDir,
-		SourceAccountStatus: string(preview.SourceAccountStat),
-		SourceSessionID:     preview.SourceSessionID,
-		SourceProjectPath:   preview.SourceProjectPath,
-		SourceIsRemote:      preview.SourceIsRemote,
+		AttemptLoggingSupported: true,
+		ProgressSupported:       preview.Capability == session.CapabilityNativeResume,
+		SourceTitle:             preview.SourceTitle,
+		SourceTool:              preview.SourceTool,
+		SourceAccount:           preview.SourceAccount,
+		SourceAccountDir:        preview.SourceAccountDir,
+		SourceAccountStatus:     string(preview.SourceAccountStat),
+		SourceSessionID:         preview.SourceSessionID,
+		SourceProjectPath:       preview.SourceProjectPath,
+		SourceIsRemote:          preview.SourceIsRemote,
 
 		TargetHarness:       preview.TargetHarness,
 		TargetAccount:       preview.TargetAccount,

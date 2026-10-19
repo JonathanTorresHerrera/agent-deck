@@ -19,6 +19,8 @@ import (
 // HarnessSwitchOptions is the common execution input for the CLI and TUI.
 type HarnessSwitchOptions struct {
 	OperationID string
+	AttemptID   string // External MCP owner writes the terminal attempt receipt.
+	Trigger     string
 	Progress    func(HarnessSwitchProgress)
 	progress    *HarnessSwitchProgress
 	Target      SwitchPreviewTarget
@@ -51,6 +53,8 @@ var ErrSwitchDestinationDivergent = errors.New("destination contains a divergent
 // true only after the destination identity and readiness checks pass (or when
 // the source was already at the requested target and the operation is a retry).
 type HarnessSwitchResult struct {
+	FreshSession         bool
+	AttemptID            string
 	Progress             *HarnessSwitchProgress
 	Preview              *SwitchPreview
 	OldTool              string
@@ -455,6 +459,22 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 }
 
 func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPreview, opts HarnessSwitchOptions, journalPath string, journal *switchJournal) (*HarnessSwitchResult, error) {
+	setSwitchStep(opts, "resolve_session_id")
+	if inst.CodexSessionID == "" && ReadHookSessionAnchor(inst.ID) != "" {
+		if err := inst.guardCodexRecovery(true); err != nil {
+			return nil, err
+		}
+	}
+	if inst.CodexSessionID == "" && preview.TargetAccount != inst.Account {
+		history, err := codexHasMainHistory(inst)
+		if err != nil {
+			return nil, fmt.Errorf("verify fresh Codex session: %w", err)
+		}
+		if !history && inst.CodexDetectedAt.IsZero() {
+			return executeFreshCodexSwitch(inst, preview, opts, journalPath, journal)
+		}
+		return nil, fmt.Errorf("refusing Codex native switch without an exact Codex session ID: main-thread history exists")
+	}
 	if preview.TargetAccount != inst.Account {
 		setSwitchStep(opts, "resolve_session_id")
 		if err := reconcileCodexSwitchBinding(inst, opts.Storage); err != nil {
@@ -2039,10 +2059,14 @@ func resultFromCommittedJournal(preview *SwitchPreview, j *switchJournal, journa
 
 func resultFromCompletedJournal(preview *SwitchPreview, j *switchJournal) *HarnessSwitchResult {
 	conversation := "switch recovered from completed journal"
+	fresh := IsCodexCompatible(j.Source.Tool) && IsCodexCompatible(j.Target.Tool) && j.Source.CodexID == "" && j.SourcePath == ""
+	if fresh {
+		conversation = "fresh session, nothing migrated"
+	}
 	if !j.DestinationReady {
 		conversation += "; native destination readiness remains pending"
 	}
-	return nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: j.Source.Tool, NewTool: j.Target.Tool, OldAccount: j.Source.Account, NewAccount: j.Target.Account, Continuity: map[bool]string{true: "native", false: "transferred"}[IsClaudeCompatible(j.Target.Tool)], Conversation: conversation, SourceArtifactSHA256: j.SourceSHA256, DestinationPath: j.Destination, DestinationReady: j.DestinationReady, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, j.Source, j.Target)
+	return nativeHarnessSwitchResult(&HarnessSwitchResult{Preview: preview, OldTool: j.Source.Tool, NewTool: j.Target.Tool, OldAccount: j.Source.Account, NewAccount: j.Target.Account, FreshSession: fresh, Continuity: map[bool]string{true: "native", false: "transferred"}[IsClaudeCompatible(j.Target.Tool) || IsCodexCompatible(j.Source.Tool) && IsCodexCompatible(j.Target.Tool)], Conversation: conversation, SourceArtifactSHA256: j.SourceSHA256, DestinationPath: j.Destination, DestinationReady: j.DestinationReady, Committed: true, LossDisclosure: append([]string(nil), preview.Fidelity.Exclusions...)}, j.Source, j.Target)
 }
 func sha256File(path string) (string, error) {
 	data, err := os.ReadFile(path)

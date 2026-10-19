@@ -10917,6 +10917,8 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// claude-compatible tool silently drops the pick.
 		if session.IsClaudeCompatible(command) {
 			claudeAccount = h.newDialog.GetClaudeAccount()
+		} else if session.IsCodexCompatible(command) {
+			claudeAccount = h.newDialog.GetCodexAccount()
 		}
 
 		parentSessionID := h.newDialog.GetParentSessionID()
@@ -15728,7 +15730,7 @@ func (h *Home) createSessionInGroupWithWorktreeAndOptions(
 		// session created under an account spawns on that login's auth. A new
 		// session has no conversation yet, so there is nothing to migrate —
 		// changing the slot LATER goes through session.SwitchAccount.
-		if claudeAccount != "" && session.IsClaudeCompatible(tool) {
+		if claudeAccount != "" && (session.IsClaudeCompatible(tool) || session.IsCodexCompatible(tool)) {
 			inst.Account = claudeAccount
 		}
 
@@ -17486,7 +17488,7 @@ func (h *Home) switchSessionHarnessWithOptions(sessionID, harness, account strin
 	if captured == nil {
 		h.instancesMu.Unlock()
 		return func() tea.Msg {
-			return accountSwitchedMsg{sessionID: sessionID, account: account, targetHarness: harness, err: fmt.Errorf("session no longer exists")}
+			return accountSwitchedMsg{sessionID: sessionID, account: account, targetHarness: harness, err: session.RecordSwitchFailure(&session.Instance{ID: sessionID}, session.SwitchPreviewTarget{Harness: harness, Account: account}, "tui", "resolve_session", fmt.Errorf("session no longer exists"))}
 		}
 	}
 	h.switchGenerations[sessionID]++
@@ -17505,13 +17507,13 @@ func (h *Home) switchSessionHarnessWithOptions(sessionID, harness, account strin
 		valid := inst != nil && modalIdentity.Matches(inst) && h.switchGenerations[sessionID] == generation
 		h.instancesMu.RUnlock()
 		if !valid {
-			return accountSwitchedMsg{sessionID: sessionID, generation: generation, sourceTool: sourceTool, sourceAccount: sourceAccount, sourceProject: sourceProject, sourceTitle: sourceTitle, sourceGroup: sourceGroup, sourceCommand: sourceCommand, sourceStatus: sourceStatus, sourceClaudeID: sourceClaudeID, sourceCodexID: sourceCodexID, sourceCWD: sourceCWD, targetHarness: harness, account: account, err: fmt.Errorf("session changed while switch was pending")}
+			return accountSwitchedMsg{sessionID: sessionID, generation: generation, sourceTool: sourceTool, sourceAccount: sourceAccount, sourceProject: sourceProject, sourceTitle: sourceTitle, sourceGroup: sourceGroup, sourceCommand: sourceCommand, sourceStatus: sourceStatus, sourceClaudeID: sourceClaudeID, sourceCodexID: sourceCodexID, sourceCWD: sourceCWD, targetHarness: harness, account: account, err: session.RecordSwitchFailure(captured, session.SwitchPreviewTarget{Harness: harness, Account: account}, "tui", "validate_source", fmt.Errorf("session changed while switch was pending"))}
 		}
 
 		cfg, cfgErr := session.LoadUserConfig()
 		baseMsg := accountSwitchedMsg{sessionID: sessionID, generation: generation, sourceTool: sourceTool, sourceAccount: sourceAccount, sourceProject: sourceProject, sourceTitle: sourceTitle, sourceGroup: sourceGroup, sourceCommand: sourceCommand, sourceStatus: sourceStatus, sourceClaudeID: sourceClaudeID, sourceCodexID: sourceCodexID, sourceCWD: sourceCWD, targetHarness: harness, account: account}
 		if cfgErr != nil {
-			baseMsg.err = cfgErr
+			baseMsg.err = session.RecordSwitchFailure(inst, session.SwitchPreviewTarget{Harness: harness, Account: account}, "tui", "load_config", cfgErr)
 			return baseMsg
 		}
 		target := session.SwitchPreviewTarget{Harness: harness, Account: account}
@@ -17519,7 +17521,7 @@ func (h *Home) switchSessionHarnessWithOptions(sessionID, harness, account strin
 		preview := session.PreviewSwitchWithMaxBytesAndSnapshot(cfg, inst, target, session.DefaultHandoffMaxChars, &sourceSnapshot)
 		msg := baseMsg
 		if preview.Execution == session.ExecutionPlanned && preview.Refusal == nil {
-			crossResult, err := session.ExecuteCrossHarnessSwitch(context.Background(), cfg, inst, session.CrossHarnessSwitchOptions{Target: target, SourceSnapshot: &sourceSnapshot}, session.CrossHarnessSwitchDependencies{
+			crossResult, err := session.ExecuteCrossHarnessSwitch(context.Background(), cfg, inst, session.CrossHarnessSwitchOptions{Trigger: "tui", Target: target, SourceSnapshot: &sourceSnapshot}, session.CrossHarnessSwitchDependencies{
 				Store:           session.StorageCrossHarnessTargetStore{Storage: h.storage},
 				Lifecycle:       session.InstanceCrossHarnessLifecycle{},
 				Observer:        session.NewNativeCrossHarnessTargetObserver(),
@@ -17527,7 +17529,7 @@ func (h *Home) switchSessionHarnessWithOptions(sessionID, harness, account strin
 			})
 			return crossHarnessSwitchMessage(msg, preview, crossResult, err)
 		}
-		result, err := session.ExecuteHarnessSwitch(cfg, inst, session.HarnessSwitchOptions{Target: target, Storage: h.storage, ArchiveDestination: archiveDestination})
+		result, err := session.ExecuteHarnessSwitch(cfg, inst, session.HarnessSwitchOptions{Trigger: "tui", Target: target, Storage: h.storage, ArchiveDestination: archiveDestination})
 		return nativeHarnessSwitchMessage(msg, result, err)
 	}
 }
