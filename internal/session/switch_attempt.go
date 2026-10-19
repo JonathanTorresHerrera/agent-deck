@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
 )
 
 // SwitchAttempt is one terminal receipt per invocation, separate from the
@@ -72,9 +74,8 @@ func (a *SwitchAttempt) Finish(outcome, step string, cause error) error {
 	if cause != nil {
 		a.Error = cause.Error()
 	}
-	home, err := os.UserHomeDir()
+	root, err := agentpaths.LegacyDir()
 	if err == nil {
-		root := filepath.Join(home, ".agent-deck")
 		err = os.MkdirAll(root, 0700)
 		if err == nil {
 			path := filepath.Join(root, "switch-attempts.jsonl")
