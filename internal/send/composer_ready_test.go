@@ -122,6 +122,42 @@ func TestClaudeComposerReady_BusyFoundUnderATitledTopBorder(t *testing.T) {
 	}
 }
 
+// TestClaudeComposerReady_EmptyComposerRobustToLimitBannerAndBorderedAgentPanel
+// reproduces WO-DECK-SWITCH-SIDECAR-STALE-01's deck_switch_account failure:
+// "Source did not reach an empty prompt; switch was not started" even though
+// the pane showed an empty composer, with a weekly-limit banner above it and
+// background-agent status lines below it. A bordered panel listing
+// background agents, drawn below the real composer with its own divider
+// pair, must never steal the "nearest two border lines" the primary parser
+// picks — the real, empty composer above it must still be found.
+func TestClaudeComposerReady_EmptyComposerRobustToLimitBannerAndBorderedAgentPanel(t *testing.T) {
+	div := strings.Repeat("─", 60)
+	lines := []string{
+		" ▐▛███▛█   Claude Code v2.1.296",
+		"❯ xx",
+		"  ⎿  You've hit your weekly limit · resets Sep 24 at 12pm (Europe/Berlin)",
+		"",
+		"✻ Cooked for 0s · done 12:03 PM",
+		div + " my-session ─",
+		"❯ ",
+		div,
+		"  [personal] u@host:/Users/u | [Fable 5.1] ctx:0%",
+		"  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+		div + " background agents ─",
+	}
+	// Enough agent rows to push the real composer's "❯ " line past both the
+	// primary parser's (wrong) divider pair AND the 40-line fallback window,
+	// matching a tall real capture rather than a short synthetic one.
+	for i := 0; i < 50; i++ {
+		lines = append(lines, "  ◯ background agent "+strings.Repeat("x", i)+" (running)")
+	}
+	lines = append(lines, div)
+	r := ClaudeComposerReady(strings.Join(lines, "\n"))
+	if !r.Ready {
+		t.Fatalf("empty composer behind a limit banner and a bordered background-agent panel must still be ready, got %+v", r)
+	}
+}
+
 func TestClaudeComposerReady_SwitchModelConfirmationIsADialog(t *testing.T) {
 	// Live capture lab/evidence/exp16-switch-model-confirm.txt: no footer hint.
 	pane := strings.Join([]string{
