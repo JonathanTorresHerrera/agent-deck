@@ -89,3 +89,27 @@ func TestSwitchAttemptExternalOwnerDoesNotDuplicateReceipt(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(home, ".agent-deck", "switch-attempts.jsonl"))
 	require.True(t, errors.Is(statErr, os.ErrNotExist))
 }
+
+func TestSwitchAttemptCompatibilityRestartFailureRetainsID(t *testing.T) {
+	home := withTempHome(t)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	noPaneProcess(t)
+	cfg := &UserConfig{Profiles: map[string]ProfileSettings{"work": {Codex: ProfileCodexSettings{ConfigDir: filepath.Join(home, "work")}}}}
+	inst := &Instance{ID: "compat-restart", Tool: "codex", Command: "codex", ProjectPath: t.TempDir()}
+	oldRunning, oldStop, oldStart := nativeSwitchRunning, nativeSwitchStop, nativeSwitchStart
+	t.Cleanup(func() { nativeSwitchRunning, nativeSwitchStop, nativeSwitchStart = oldRunning, oldStop, oldStart })
+	nativeSwitchRunning = func(*Instance) bool { return true }
+	nativeSwitchStop = func(*Instance) error { return nil }
+	nativeSwitchStart = func(i *Instance) error {
+		if i.Account == "work" {
+			return errors.New("target launch failed")
+		}
+		return nil
+	}
+	_, err := SwitchAccount(cfg, inst, "work", AccountSwitchOptions{})
+	require.ErrorIs(t, err, ErrAccountSwitchRestartFailed)
+	rows := readSwitchAttempts(t, home)
+	require.Len(t, rows, 1)
+	require.Equal(t, rows[0].ID, SwitchAttemptID(err))
+	require.NotEmpty(t, SwitchAttemptID(err))
+}

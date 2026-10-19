@@ -94,7 +94,7 @@ func SwitchAccount(cfg *UserConfig, inst *Instance, account string, opts Account
 		if err == nil {
 			err = errors.New("switch did not commit")
 		}
-		return nil, fmt.Errorf("%w: %v", ErrAccountSwitchRestartFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrAccountSwitchRestartFailed, err)
 	}
 	conversation := result.Conversation
 	if conversation == "" {
