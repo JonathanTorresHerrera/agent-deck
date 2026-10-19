@@ -14,8 +14,11 @@ func codexHasMainHistory(inst *Instance) (bool, error) {
 	if !inst.CodexRolloutIsResolvableLocally() {
 		return false, fmt.Errorf("Codex history is not locally resolvable")
 	}
+	// A process-owned rollout can prove the active source home differs from
+	// the configured/default seat. Never prove freshness in the observer's home.
+	sourceHome := inst.ResolvedCodexHome()
 	for _, dir := range []string{"sessions", "archived_sessions"} {
-		root := filepath.Join(inst.getCodexHomeDir(), dir)
+		root := filepath.Join(sourceHome, dir)
 		found := false
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if os.IsNotExist(err) && path == root {

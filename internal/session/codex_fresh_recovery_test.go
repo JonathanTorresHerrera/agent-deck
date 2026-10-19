@@ -137,3 +137,20 @@ func TestCodexRecoveryExplicitFreshRestartRemainsAvailable(t *testing.T) {
 	require.NoError(t, inst.guardCodexRecovery(false))
 	require.Empty(t, inst.CodexSessionID)
 }
+
+func TestFreshCodexSwitchChecksTheLiveSourceHome(t *testing.T) {
+	home := withTempHome(t)
+	configured := filepath.Join(home, "configured")
+	actual := filepath.Join(home, "actual")
+	t.Setenv("CODEX_HOME", configured)
+	cwd := t.TempDir()
+	id := "01a14c0c-85c6-7310-b63a-3e450ab5c59a"
+	p := writeRollout(t, actual, id, cwd, "", "", time.Now())
+	stubCodexPaneOpenPaths(t, []string{p}, nil)
+	cfg := &UserConfig{Profiles: map[string]ProfileSettings{"work": {Codex: ProfileCodexSettings{ConfigDir: filepath.Join(home, "work")}}}}
+	inst := &Instance{ID: "live-home-history", Tool: "codex", Command: "codex", ProjectPath: cwd}
+	_, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{Target: SwitchPreviewTarget{Harness: "codex", Account: "work"}, NoStart: true})
+	require.ErrorContains(t, err, "without an exact Codex session ID")
+	require.Empty(t, inst.Account)
+	require.NoFileExists(t, filepath.Join(home, "work", "sessions"))
+}
