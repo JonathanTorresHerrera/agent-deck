@@ -319,6 +319,7 @@ type Instance struct {
 	CodexDetectedAt          time.Time `json:"codex_detected_at,omitempty"`
 	CodexStartedAt           int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
 	lastCodexScanAt          time.Time // Rate-limits expensive ~/.codex/sessions scans
+	codexFreshStart          bool      // Explicit fresh-switch launch authorization; never persisted.
 	runtimeCodexHome         string    // Exact source home pinned during a native switch/rollback.
 	lastCodexIdentityRefresh time.Time
 	// Usage-limit detection (#1802), all guarded by i.mu.
@@ -2553,24 +2554,11 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// fresh, resume and fork spawns alike since a -c override never persists.
 	identityFlag := i.codexIdentityFlag(codexHome, i.EffectiveWorkingDir())
 
-	// Issue #756: Gate `codex resume <sid>` on rollout-file existence.
-	// If Codex died before flushing its rollout JSONL (tmux crash, kill -9
-	// in the SessionStart→first-flush window), the captured session_id is
-	// permanently unresumable. Without this check the bridge appends
-	// `resume <stale-uuid>` on every restart and Codex exits immediately,
-	// flipping the session back to error in an infinite loop. Drop the
-	// stale ID, clear the .sid sidecar so the next hook tick rebinds
-	// cleanly, and spawn fresh.
-	if i.CodexSessionID != "" && !codexRolloutExistsInHome(i.CodexSessionID, codexHome) {
-		sessionLog.Warn("codex_resume_stale_sid_dropped",
-			slog.String("instance_id", i.ID),
-			slog.String("title", i.Title),
-			slog.String("sid", i.CodexSessionID),
-			slog.String("codex_home", codexHome))
-		i.CodexSessionID = ""
-		i.CodexDetectedAt = time.Time{}
-		ClearHookSessionAnchor(i.ID)
-	}
+	// Missing rollout bytes must never erase a recorded conversation or its
+	// instance anchor. Start/Restart validate recovery before replacing a pane;
+	// retaining resume here also closes a file-disappearance race after that
+	// validation. An unavailable conversation fails explicitly instead of
+	// silently booting and binding a blank one (WSL recovery, 2026-10-19).
 
 	// Safety net (incident 2026-07-15): codex loads subagent-sourced threads
 	// via `resume` but refuses user-initiated turns on them — the TUI exits
@@ -3430,7 +3418,8 @@ func (i *Instance) queryCodexSession(excludeIDs map[string]bool, allowUnscoped b
 			// best user-sourced match instead of returning nothing when the
 			// most-recent match happens to be a subagent. See
 			// codex_subagent_gate.go.
-			if i.shouldRejectCodexSubagentRebind(sessionID) {
+			head, readable := readCodexRolloutHead(path)
+			if (readable && head.Subagent) || i.shouldRejectCodexSubagentRebind(sessionID) {
 				return nil
 			}
 
@@ -5127,6 +5116,9 @@ func (i *Instance) Start() error {
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
+	if err := i.guardCodexRecovery(false); err != nil {
+		return err
+	}
 	beforeLock := spawnGenerationSnapshot(i.ID)
 	release, lockErr := acquireInstanceSpawnLock(i.ID)
 	if lockErr != nil {
@@ -5499,6 +5491,9 @@ func (i *Instance) Start() error {
 // produce two parallel tmux sessions.
 func (i *Instance) StartWithMessage(message string) error {
 	if err := i.ValidateAccount(); err != nil {
+		return err
+	}
+	if err := i.guardCodexRecovery(false); err != nil {
 		return err
 	}
 	beforeLock := spawnGenerationSnapshot(i.ID)
@@ -8055,7 +8050,8 @@ func (i *Instance) clearSessionBindingForFreshStart() {
 		i.lastOpenCodeScanAt = time.Time{}
 	}
 
-	if i.Tool == "codex" {
+	if IsCodexCompatible(i.Tool) {
+		ClearHookSessionAnchor(i.ID)
 		i.CodexSessionID = ""
 		i.CodexDetectedAt = time.Time{}
 		i.CodexStartedAt = 0
@@ -9903,6 +9899,9 @@ func (i *Instance) restart(env map[string]string) error {
 	if err := i.ValidateAccount(); err != nil {
 		return err
 	}
+	if err := i.guardCodexRecovery(true); err != nil {
+		return err
+	}
 	beforeLock := spawnGenerationSnapshot(i.ID)
 	release, lockErr := acquireInstanceSpawnLock(i.ID)
 	if lockErr != nil {
@@ -10572,6 +10571,10 @@ func (i *Instance) restart(env map[string]string) error {
 // This recreates the tmux session and clears the stored tool session binding first,
 // so the next start gets a brand-new tool session ID.
 func (i *Instance) RestartFresh() error {
+	if IsCodexCompatible(i.Tool) {
+		i.codexFreshStart = true
+		defer func() { i.codexFreshStart = false }()
+	}
 	i.prepareRestartMCPConfig()
 	i.spawnGen.Add(1)
 

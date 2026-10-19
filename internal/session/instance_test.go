@@ -1763,7 +1763,7 @@ func TestCodexHomeFromCommand_PreservesQuotedAssignmentSpaces(t *testing.T) {
 	}
 }
 
-func TestBuildCodexCommand_InlineCodexHomeDropsStaleID(t *testing.T) {
+func TestBuildCodexCommand_InlineCodexHomeRetainsRecordedID(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
@@ -1801,15 +1801,16 @@ func TestBuildCodexCommand_InlineCodexHomeDropsStaleID(t *testing.T) {
 	}
 
 	cmd := inst.buildCodexCommand("codex")
-	if strings.Contains(cmd, "resume "+id) {
-		t.Fatalf("resume should be dropped when rollout is absent from inline CODEX_HOME, got %q", cmd)
+	if !strings.Contains(cmd, "resume "+id) {
+		t.Fatalf("recorded resume binding lost: %q", cmd)
 	}
-	if inst.CodexSessionID != "" {
-		t.Fatalf("CodexSessionID should be cleared after stale-id drop, got %q", inst.CodexSessionID)
+	if inst.CodexSessionID != id {
+		t.Fatalf("recorded ID changed: %q", inst.CodexSessionID)
 	}
-	if got := ReadHookSessionAnchor(inst.ID); got != "" {
-		t.Fatalf(".sid anchor should be cleared after stale-id drop, got %q", got)
+	if got := ReadHookSessionAnchor(inst.ID); got != id {
+		t.Fatalf("instance anchor changed: %q", got)
 	}
+
 }
 
 func TestCanRestartCursor(t *testing.T) {
@@ -1937,12 +1938,10 @@ func writeFakeCodexRollout(t *testing.T, codexHome, sessionID string) string {
 	return path
 }
 
-// TestBuildCodexCommand_DropsResumeWhenRolloutMissing verifies that a stale
-// CodexSessionID with no on-disk rollout (the death-loop signature from
-// Issue #756) gets dropped: the emitted command starts a fresh codex run
-// instead of `codex resume <stale-uuid>`, and the in-memory + .sid state
-// is cleared so the next save persists the cleanup.
-func TestBuildCodexCommand_DropsResumeWhenRolloutMissing(t *testing.T) {
+// TestBuildCodexCommand_RetainsResumeWhenRolloutMissing verifies that command
+// generation cannot discard a recorded conversation. Recovery validates before
+// spawn; if bytes disappear later, the exact resume remains instead of blank.
+func TestBuildCodexCommand_RetainsResumeWhenRolloutMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
@@ -1972,21 +1971,19 @@ func TestBuildCodexCommand_DropsResumeWhenRolloutMissing(t *testing.T) {
 	}
 
 	cmd := inst.buildCodexCommand(inst.Command)
-	if strings.Contains(cmd, "resume "+staleID) {
-		t.Fatalf("expected resume to be dropped for stale sid, got %q", cmd)
+	if !strings.Contains(cmd, "resume "+staleID) {
+		t.Fatalf("recorded resume binding lost: %q", cmd)
 	}
-	if strings.Contains(cmd, " resume ") {
-		t.Fatalf("expected no resume token at all, got %q", cmd)
+	if inst.CodexSessionID != staleID {
+		t.Fatalf("recorded ID changed: %q", inst.CodexSessionID)
 	}
-	if inst.CodexSessionID != "" {
-		t.Fatalf("CodexSessionID should be cleared after stale-sid drop, got %q", inst.CodexSessionID)
+	if inst.CodexDetectedAt.IsZero() {
+		t.Fatal("recorded detection timestamp erased")
 	}
-	if !inst.CodexDetectedAt.IsZero() {
-		t.Fatalf("CodexDetectedAt should be zeroed after stale-sid drop, got %v", inst.CodexDetectedAt)
+	if got := ReadHookSessionAnchor(inst.ID); got != staleID {
+		t.Fatalf("instance anchor changed: %q", got)
 	}
-	if got := ReadHookSessionAnchor(inst.ID); got != "" {
-		t.Fatalf(".sid anchor should be cleared after stale-sid drop, got %q", got)
-	}
+
 }
 
 // TestBuildCodexCommand_KeepsResumeWhenRolloutExists is the happy-path

@@ -114,9 +114,9 @@ func TestIssue1929_NoAccountResumeGateUnchanged(t *testing.T) {
 	}
 }
 
-// A genuinely stale binding (no rollout anywhere) must still be dropped — the
-// #756 gate's whole purpose. Guards against "fix" by disabling the gate.
-func TestIssue1929_StaleBindingStillDropped(t *testing.T) {
+// A missing rollout must refuse recovery before spawn while preserving the
+// recorded account binding. A blank replacement would destroy continuity.
+func TestIssue1929_MissingBindingRefusesRecovery(t *testing.T) {
 	codexAccountHome(t)
 	sid := "a1111111-2222-4333-8444-555555555554"
 
@@ -127,12 +127,16 @@ func TestIssue1929_StaleBindingStillDropped(t *testing.T) {
 		CodexDetectedAt: time.Now(),
 	}
 	cmd := inst.buildCodexCommand("codex")
-	if inst.CodexSessionID != "" {
-		t.Errorf("stale binding survived the resume gate: %q", inst.CodexSessionID)
+	if inst.CodexSessionID != sid || !strings.Contains(cmd, "resume "+sid) {
+		t.Fatalf("recorded binding was discarded: id=%q cmd=%q", inst.CodexSessionID, cmd)
 	}
-	if strings.Contains(cmd, "resume ") {
-		t.Errorf("launch command resumes an unresumable session.\ngot: %s", cmd)
+	if err := inst.Start(); err == nil || !strings.Contains(err.Error(), "recorded conversation") {
+		t.Fatalf("missing rollout must refuse before spawn, got %v", err)
 	}
+	if inst.CodexSessionID != sid {
+		t.Fatalf("refused recovery changed recorded ID: %q", inst.CodexSessionID)
+	}
+
 }
 
 // #1929: CreateForkedCodexInstanceWithOptions never copied Account onto the

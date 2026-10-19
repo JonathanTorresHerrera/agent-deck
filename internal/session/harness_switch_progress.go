@@ -28,6 +28,7 @@ type HarnessSwitchStep struct {
 }
 
 type HarnessSwitchProgress struct {
+	AttemptID      string              `json:"attempt_id"`
 	OperationID    string              `json:"operation_id"`
 	InstanceID     string              `json:"instance_id"`
 	Title          string              `json:"title"`
@@ -88,6 +89,37 @@ func ReadHarnessSwitchProgress(id string) (*HarnessSwitchProgress, error) {
 // registry work. The receipt lives outside the restarted harness, and survives
 // TUI/CLI recreation. A failed lock never overwrites an active operation.
 func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOptions) (result *HarnessSwitchResult, err error) {
+	attempt := NewSwitchAttempt(inst, opts.Target, opts.Trigger)
+	external := opts.AttemptID != ""
+	if external {
+		attempt.ID = opts.AttemptID
+	}
+	defer func() {
+		outcome, step := "pending", "preflight"
+		if result != nil {
+			result.AttemptID = attempt.ID
+			if result.DestinationReady {
+				outcome = "success"
+			}
+			if result.Progress != nil {
+				step = result.Progress.activeStep()
+			}
+		}
+		if p := HarnessSwitchProgressFor(result, err); p != nil {
+			p.AttemptID = attempt.ID
+			step = p.activeStep()
+		}
+		if err != nil {
+			outcome = "failed"
+		}
+		if external {
+			if err != nil {
+				err = &SwitchAttemptError{AttemptID: attempt.ID, Cause: err}
+			}
+		} else {
+			err = attempt.Finish(outcome, step, err)
+		}
+	}()
 	if inst == nil || !validSwitchIdentity(inst.ID) {
 		return nil, fmt.Errorf("session has no safe switch identity")
 	}
@@ -100,11 +132,15 @@ func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOpt
 	if err != nil {
 		return nil, err
 	}
+	p.AttemptID = attempt.ID
 	opts.progress = p
 	activeHarnessSwitchProgress.Store(inst.ID, func(step string) { setSwitchStep(opts, step) })
 	defer activeHarnessSwitchProgress.Delete(inst.ID)
 	setSwitchStep(opts, "waiting_for_idle")
 	defer func() {
+		if err == nil && result != nil && result.Committed && opts.Storage != nil {
+			err = opts.Storage.CommitNativeHarnessSwitch(inst, result)
+		}
 		p.FinalAccount = inst.Account
 		if err != nil {
 			p.Status, p.Reason = "failed", err.Error()
@@ -237,7 +273,7 @@ func (p *HarnessSwitchProgress) Text() string {
 		fmt.Fprintf(&b, "%d. %s [%s]\n", n+1, s.Name, s.Status)
 	}
 	if p.FailedStep != "" {
-		fmt.Fprintf(&b, "\nFailed step: %s\n", p.FailedStep)
+		fmt.Fprintf(&b, "\nAccount switch failed (log %s)\nFailed step: %s\n", p.AttemptID, p.FailedStep)
 	}
 	if p.Reason != "" {
 		fmt.Fprintf(&b, "\n%s\n", p.Reason)

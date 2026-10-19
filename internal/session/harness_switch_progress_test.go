@@ -15,7 +15,7 @@ func TestHarnessSwitchFailureCarriesDurableCopyableProgress(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	noPaneProcess(t)
 	cfg := &UserConfig{Profiles: map[string]ProfileSettings{"work": {Codex: ProfileCodexSettings{ConfigDir: filepath.Join(home, "work")}}}}
-	inst := &Instance{ID: "progress", Title: "Aida fixture", Tool: "codex", Command: "codex", ProjectPath: t.TempDir()}
+	inst := &Instance{CodexDetectedAt: time.Now(), ID: "progress", Title: "Aida fixture", Tool: "codex", Command: "codex", ProjectPath: t.TempDir()}
 	_, err := ExecuteHarnessSwitch(cfg, inst, HarnessSwitchOptions{Target: SwitchPreviewTarget{Harness: "codex", Account: "work"}, NoStart: true})
 	require.Error(t, err)
 	var failure *HarnessSwitchFailure
