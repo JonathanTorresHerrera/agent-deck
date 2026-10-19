@@ -254,7 +254,8 @@ type Home struct {
 	instances          []*session.Instance
 	instanceByID       map[string]*session.Instance // O(1) instance lookup by ID
 	instancesMu        sync.RWMutex                 // Protects instances slice for thread-safe background access
-	switchGenerations  map[string]uint64            // owns async harness-switch completions per instance
+	switchProgressSeen map[string]string
+	switchGenerations  map[string]uint64 // owns async harness-switch completions per instance
 	storage            *session.Storage
 	groupTree          *session.GroupTree
 	flatItems          []session.Item // Flattened view for cursor navigation
@@ -8469,6 +8470,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// substantive source identity conflicts and reconciles the target.
 			fresh = current != nil && h.switchGenerations[msg.sessionID] == msg.generation && current.Tool == msg.sourceTool && current.ProjectPath == msg.sourceProject && current.Title == msg.sourceTitle && current.GroupPath == msg.sourceGroup && current.Command == msg.sourceCommand && current.EffectiveWorkingDir() == msg.sourceCWD && (current.Account == msg.sourceAccount || current.Account == msg.account)
 		}
+		if msg.nativeProgress != nil && current != nil && h.switchGenerations[msg.sessionID] == msg.generation && current.Tool == msg.sourceTool && current.ProjectPath == msg.sourceProject && current.Command == msg.sourceCommand && current.GroupPath == msg.sourceGroup && (current.Account == msg.sourceAccount || current.Account == msg.account) {
+			fresh = true
+		}
 		h.instancesMu.RUnlock()
 		if !fresh {
 			uiLog.Debug("stale_harness_switch_completion", slog.String("session_id", msg.sessionID), slog.Uint64("generation", msg.generation))
@@ -8507,6 +8511,15 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.rebuildFlatItems()
 				h.invalidatePreviewCache(msg.sessionID)
 			}
+		}
+		if msg.nativeProgress != nil && !msg.destinationDivergent {
+			if msg.err != nil && msg.nativeProgress.Status != "failed" {
+				if p, err := session.RecordHarnessSwitchProgress(current, msg.nativeProgress.OperationID, msg.account, "switching_account", "failed", msg.err.Error()); err == nil {
+					msg.nativeProgress = p
+				}
+			}
+			h.presentHarnessSwitchProgress(msg.nativeProgress)
+			return h, nil
 		}
 		for _, warning := range msg.warnings {
 			uiLog.Warn("account_switch_warning", slog.String("session_id", msg.sessionID), slog.String("detail", warning))
@@ -9842,6 +9855,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case tickMsg:
+		h.pollHarnessSwitchProgress()
 		h.expireDividerHover(time.Now())
 		h.telemetrySample()
 
@@ -13490,6 +13504,9 @@ func (h *Home) handleConfirmDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case ConfirmNotice:
+		if msg.String() == "c" || msg.String() == "ctrl+c" {
+			return h, h.copySwitchNotice()
+		}
 		// Acknowledge-only: any of the usual dismiss keys closes it.
 		switch msg.String() {
 		case "enter", "esc", "o", "O", "y", "Y", "n", "N", " ":
@@ -17287,6 +17304,7 @@ type accountSwitchedMsg struct {
 	warnings       []string
 	target         *session.Instance // distinct cross-harness target; source remains unchanged
 	nativeResult   *session.HarnessSwitchResult
+	nativeProgress *session.HarnessSwitchProgress
 	// destinationDivergent is set when err is (or wraps)
 	// session.ErrSwitchDestinationDivergent: the destination transcript is not
 	// provably stale, so the refusal is not a dead end — the user can retry
@@ -17352,6 +17370,7 @@ func crossHarnessSwitchMessage(msg accountSwitchedMsg, preview *session.SwitchPr
 // must never be presented as a pending or successful switch.
 func nativeHarnessSwitchMessage(msg accountSwitchedMsg, result *session.HarnessSwitchResult, err error) accountSwitchedMsg {
 	msg.err = err
+	msg.nativeProgress = session.HarnessSwitchProgressFor(result, err)
 	msg.destinationDivergent = errors.Is(err, session.ErrSwitchDestinationDivergent)
 	if result == nil {
 		return msg

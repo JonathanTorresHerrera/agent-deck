@@ -19,6 +19,7 @@ import (
 // value means the target default only where the preview says that is valid).
 func handleSessionSwitch(profile string, args []string) {
 	fs := flag.NewFlagSet("session switch", flag.ExitOnError)
+	operationID := fs.String("operation-id", "", "Correlate an existing MCP progress receipt")
 	toHarness := fs.String("to-harness", "", "Target harness (claude, codex, pi, …); empty keeps the source harness")
 	toAccount := fs.String("to-account", "", "Target configured account slot; empty means the target default")
 	maxBytes := fs.Int("max-bytes", session.DefaultHandoffMaxChars, "Maximum transferred context bytes for cross-harness handoff")
@@ -81,7 +82,7 @@ func handleSessionSwitch(profile string, args []string) {
 		})
 	} else {
 		result, switchErr = session.ExecuteHarnessSwitch(cfg, inst, session.HarnessSwitchOptions{
-			Target: target, MaxBytes: *maxBytes, NoStart: *noStart,
+			OperationID: *operationID, Target: target, MaxBytes: *maxBytes, NoStart: *noStart,
 			Storage: storage, ArchiveDestination: *archiveDestination,
 		})
 	}
@@ -89,7 +90,7 @@ func handleSessionSwitch(profile string, args []string) {
 		if switchErr == nil {
 			switchErr = fmt.Errorf("switch failed without a result")
 		}
-		out.Error(switchErr.Error(), ErrCodeInvalidOperation)
+		out.ErrorWithData(switchErr.Error(), ErrCodeInvalidOperation, nativeSwitchProgressPayload(session.HarnessSwitchProgressFor(result, switchErr)))
 		os.Exit(1)
 	}
 	if switchErr != nil {
@@ -116,7 +117,10 @@ func handleSessionSwitch(profile string, args []string) {
 				fmt.Fprintf(os.Stderr, "Switch failed; status=failed; recovery-required=%t; target_id=%s; target_created=%t; target_ready=%t; source_archived=%t: %v\n", recoveryRequired, crossHarnessTargetID(crossResult), crossResult.TargetCreated, crossResult.TargetReady, crossResult.TargetReady, switchErr)
 			}
 		} else if *jsonOutput {
-			out.ErrorWithData(switchErr.Error(), ErrCodeInvalidOperation, map[string]interface{}{"status": switchPresentationStatus(false, false), "pending": false, "committed": result != nil && result.Committed, "recovery_required": result != nil && result.Committed, "archive_destination_available": errors.Is(switchErr, session.ErrSwitchDestinationDivergent)})
+			data := nativeSwitchProgressPayload(session.HarnessSwitchProgressFor(result, switchErr))
+			data["status"], data["pending"], data["committed"], data["recovery_required"] = "failed", false, result != nil && result.Committed, result != nil && result.Committed
+			data["archive_destination_available"] = errors.Is(switchErr, session.ErrSwitchDestinationDivergent)
+			out.ErrorWithData(switchErr.Error(), ErrCodeInvalidOperation, data)
 		} else {
 			message := switchErr.Error()
 			if errors.Is(switchErr, session.ErrSwitchDestinationDivergent) {
@@ -151,7 +155,7 @@ func handleSessionSwitch(profile string, args []string) {
 	}
 	payload := map[string]any{
 		"success": result.Committed && result.DestinationReady, "status": switchPresentationStatus(result.Committed, result.DestinationReady), "pending": result.Committed && !result.DestinationReady,
-		"id": inst.ID, "title": inst.Title,
+		"id": inst.ID, "title": inst.Title, "native_session_id": nativeSwitchSessionID(inst),
 		"old_tool": result.OldTool, "new_tool": result.NewTool,
 		"old_account": result.OldAccount, "new_account": result.NewAccount,
 		"continuity": result.Continuity, "source_sha256": result.SourceArtifactSHA256,
@@ -159,6 +163,9 @@ func handleSessionSwitch(profile string, args []string) {
 		"source_archived":      false,
 		"destination_archived": result.DestinationArchived,
 		"restarted":            result.Restarted, "loss_disclosure": result.LossDisclosure,
+	}
+	for key, value := range nativeSwitchProgressPayload(result.Progress) {
+		payload[key] = value
 	}
 	if *jsonOutput {
 		enc := json.NewEncoder(os.Stdout)
@@ -324,4 +331,15 @@ func readinessPresentation(ready bool) string {
 		return "ready"
 	}
 	return "pending"
+}
+
+func nativeSwitchProgressPayload(progress *session.HarnessSwitchProgress) map[string]any {
+	return progress.Fields()
+}
+
+func nativeSwitchSessionID(inst *session.Instance) string {
+	if session.IsCodexCompatible(inst.Tool) {
+		return inst.CodexSessionID
+	}
+	return inst.ClaudeSessionID
 }

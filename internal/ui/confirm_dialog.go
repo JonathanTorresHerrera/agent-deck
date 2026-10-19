@@ -865,7 +865,7 @@ func (c *ConfirmDialog) View() string {
 		borderColor = ColorYellow
 		buttons = lipgloss.JoinVertical(lipgloss.Left,
 			renderButton("OK", ColorAccent, true),
-			hintStyle.Render("Enter / Esc / o dismiss"))
+			hintStyle.Render("Enter / Esc / o dismiss · c copy full text"))
 
 	case ConfirmInstallHooks:
 		title = "Claude Code Hooks"
