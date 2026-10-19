@@ -27,11 +27,28 @@ func resolveCurrentCodexIdentity(inst *Instance, excluded map[string]bool) (stri
 		head, ok := readCodexRolloutHead(path)
 		return ok && head.UserThread && !excluded[head.ID] && canonicalDir(head.Cwd) == cwd && validateExactSessionID(head.ID) == nil
 	}
-	if live := inst.LiveCodexThreadID(); live != "" && !excluded[live] {
-		if path := codexRolloutPathInHome(live, home); path != "" && valid(path) {
-			return live, nil
+	// Parent Codex processes also keep their child review rollouts open.
+	// Filter by session_meta before counting ownership; raw FD/thread counts
+	// incorrectly make a single resumed user conversation look ambiguous.
+	if paths, err := codexPaneOpenPaths(inst); err == nil {
+		userIDs := map[string]bool{}
+		for _, path := range paths {
+			fileID := extractCodexSessionIDFromPath(path)
+			if fileID != "" && valid(path) {
+				head, _ := readCodexRolloutHead(path)
+				if head.ID == fileID {
+					userIDs[head.ID] = true
+				}
+			}
+		}
+		if len(userIDs) > 1 {
+			return "", fmt.Errorf("ambiguous Codex session ID: multiple process-owned user threads; refusing to guess")
+		}
+		for id := range userIDs {
+			return id, nil
 		}
 	}
+
 	since := inst.LastStartedAt
 	if since.IsZero() {
 		since = inst.CreatedAt

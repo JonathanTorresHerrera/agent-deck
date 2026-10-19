@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asheshgoplani/agent-deck/internal/tmux"
 	"github.com/stretchr/testify/require"
 )
 
@@ -153,4 +154,37 @@ func TestCodexSwitchIgnoresTheIncidentSubagentThreads(t *testing.T) {
 	inst := &Instance{ID: "subagents", Tool: "codex", Command: "codex", ProjectPath: cwd, CodexSessionID: sid, LastStartedAt: now.Add(-2 * time.Hour)}
 	inst.UpdateCodexSession(nil)
 	require.Equal(t, sid, inst.CodexSessionID, "the incident's newer rollouts are child reviewers, not main-thread rotations")
+}
+
+func TestCodexSwitchRecoversMainProcessFromPoisonedChildBinding(t *testing.T) {
+	home := withTempHome(t)
+	t.Setenv("CODEX_HOME", home)
+	now := time.Now()
+	cwd := t.TempDir()
+	parent := "01a14c0c-85c6-7310-b63a-3e450ab5c59a"
+	child := "01a1543c-d2fa-7282-9fb6-1f9d8ef3e4f0"
+	mainPath := switchRotationRollout(t, home, parent, cwd, now.Add(-48*time.Hour))
+	childPath := writeRollout(t, home, child, cwd, parent, "", now)
+	stubCodexPaneOpenPaths(t, []string{mainPath, childPath}, nil)
+	inst := &Instance{ID: "poisoned", Tool: "codex", Command: "codex", ProjectPath: cwd, CodexSessionID: child, LastStartedAt: now.Add(-time.Hour)}
+	inst.UpdateCodexSession(nil)
+	require.Equal(t, parent, inst.CodexSessionID, "a resumed main thread predates LastStartedAt and remains authoritative beside its child rollout")
+}
+
+func TestCodexSwitchPollingRejectsChildFromTmuxEnvironment(t *testing.T) {
+	home := withTempHome(t)
+	t.Setenv("CODEX_HOME", home)
+	noPaneProcess(t)
+	cwd := t.TempDir()
+	parent := "01a14c0c-85c6-7310-b63a-3e450ab5c59a"
+	child := "01a1543c-d2fa-7282-9fb6-1f9d8ef3e4f0"
+	writeRollout(t, home, child, cwd, parent, "", time.Now())
+	bin := t.TempDir()
+	script := "#!/bin/sh\ncase \"$*\" in\n*show-environment*) printf 'CODEX_SESSION_ID=" + child + "\\n';;\n*list-panes*) printf '0\\n';;\nesac\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	inst := &Instance{ID: "env-poison", Tool: "codex", Command: "codex", ProjectPath: cwd, CodexSessionID: parent}
+	inst.SetTmuxSessionForTest(&tmux.Session{Name: "fixture", SocketName: "fixture"})
+	inst.UpdateCodexSession(nil)
+	require.Equal(t, parent, inst.CodexSessionID, "tmux environment must obey the same subagent gate as process and hook evidence")
 }

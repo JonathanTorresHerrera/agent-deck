@@ -4183,7 +4183,7 @@ func (i *Instance) updateCodexSessionForPass(excludeIDs map[string]bool, forcePr
 
 	// 1. Try to read from tmux environment first (authoritative if set)
 	if i.tmuxSession != nil {
-		if sessionID, err := i.tmuxSession.GetEnvironment("CODEX_SESSION_ID"); err == nil && sessionID != "" {
+		if sessionID, err := i.tmuxSession.GetEnvironment("CODEX_SESSION_ID"); err == nil && sessionID != "" && !i.shouldRejectCodexSubagentRebind(sessionID) {
 			envSessionID = sessionID
 			if i.CodexSessionID != sessionID {
 				i.CodexSessionID = sessionID
