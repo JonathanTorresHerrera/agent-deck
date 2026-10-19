@@ -7,8 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+var activeHarnessSwitchProgress sync.Map // instance ID -> lifecycle callback; source lock owns registration.
+
+func notifyHarnessSwitchLifecycle(inst *Instance, step string) {
+	if callback, ok := activeHarnessSwitchProgress.Load(inst.ID); ok {
+		callback.(func(string))(step)
+	}
+}
 
 type HarnessSwitchStep struct {
 	ID          string     `json:"id"`
@@ -92,6 +101,8 @@ func ExecuteHarnessSwitch(cfg *UserConfig, inst *Instance, opts HarnessSwitchOpt
 		return nil, err
 	}
 	opts.progress = p
+	activeHarnessSwitchProgress.Store(inst.ID, func(step string) { setSwitchStep(opts, step) })
+	defer activeHarnessSwitchProgress.Delete(inst.ID)
 	setSwitchStep(opts, "waiting_for_idle")
 	defer func() {
 		p.FinalAccount = inst.Account

@@ -259,3 +259,10 @@ func TestSwitchStopFailurePersistsJournalWithoutStartingAnUnconfirmedSource(t *t
 		})
 	}
 }
+
+func TestSwitchComposerReadyRefusesHookReviewOverAnEmptyComposer(t *testing.T) {
+	frame := "› Ask Codex to do anything\n\nHooks need review: 1 hook is new or changed\n  1. Review hooks\n  2. Continue without hooks\nPress enter to continue"
+	if ready, _ := switchComposerReady(frame, "codex"); ready {
+		t.Fatal("hook-review overlay was treated as a ready resumed account")
+	}
+}

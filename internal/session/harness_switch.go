@@ -346,7 +346,7 @@ func executeNativeClaudeSwitch(cfg *UserConfig, inst *Instance, preview *SwitchP
 	}
 
 	if wasRunning && nativeSwitchRunning(inst) {
-		setSwitchStep(opts, "stopping")
+		setSwitchStep(opts, "waiting_for_idle")
 		if err := nativeSwitchStop(inst); err != nil {
 			return switchFailedOnStop(journalPath, j, inst, wasRunning, fmt.Errorf("stop source before install: %w", err))
 		}
@@ -544,7 +544,7 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 		return nil, err
 	}
 	if wasRunning && nativeSwitchRunning(inst) {
-		setSwitchStep(opts, "stopping")
+		setSwitchStep(opts, "waiting_for_idle")
 		if err := nativeSwitchStop(inst); err != nil {
 			return switchFailedOnStop(journalPath, j, inst, wasRunning, err)
 		}
@@ -643,6 +643,14 @@ func executeNativeCodexSwitch(cfg *UserConfig, inst *Instance, preview *SwitchPr
 			deadline := time.Now().Add(15 * time.Second)
 			for time.Now().Before(deadline) {
 				if observeNativeCodexResume(inst, j.Source.CodexID, targetHome) {
+					raw, captureErr := inst.tmuxSession.CapturePaneFresh()
+					ready, reason := switchComposerReady(raw, "codex")
+					if captureErr != nil || !ready {
+						result.Conversation = "Target account process owns the exact conversation, but verification is pending: " + reason + "; inspect hook trust and the target composer"
+						time.Sleep(200 * time.Millisecond)
+						continue
+					}
+
 					result.DestinationReady, j.DestinationReady, j.TargetObserved = true, true, true
 					result.Conversation = "Exact Codex conversation resumed by the new process in the target account home"
 					if err := writeSwitchJournal(journalPath, j); err != nil {

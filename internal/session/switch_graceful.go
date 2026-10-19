@@ -85,7 +85,9 @@ func gracefulSwitchStop(inst *Instance) error {
 	if IsClaudeCompatible(inst.Tool) {
 		tool = "claude"
 	}
+	notifyHarnessSwitchLifecycle(inst, "waiting_for_idle")
 	if err := gracefulSwitchExit(pane, tool, func() {
+		notifyHarnessSwitchLifecycle(inst, "stopping")
 		// Freeze fast-death observers and discover MCP descendants while the
 		// agent process still exists. KillAndWait reaps them after shutdown.
 		inst.bumpSpawnGenAndBarrier()
@@ -263,6 +265,16 @@ func switchComposerReady(raw, tool string) (bool, string) {
 		return ready.Ready, ready.Code
 	}
 	if tool == "codex" {
+		// A review modal can leave the old empty composer in the captured
+		// background. It must be reviewed in Codex, never treated as readiness.
+		rows := strings.Split(tmux.StripANSI(raw), "\n")
+		if len(rows) > 40 {
+			rows = rows[len(rows)-40:]
+		}
+		tail := strings.ToLower(strings.Join(rows, "\n"))
+		if strings.Contains(tail, "hooks need review") && (strings.Contains(tail, "new or changed") || strings.Contains(tail, "review hooks")) {
+			return false, "Codex hooks need review in this account home"
+		}
 		// Codex has its own prompt glyph and placeholder rules. A visible,
 		// empty composer is necessary before submitting a slash command.
 		draft, visible := send.CodexComposerDraft(raw, tmux.StripANSI)

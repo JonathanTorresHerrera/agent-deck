@@ -147,7 +147,7 @@ type switchPreviewRefusalJSON struct {
 
 func printSwitchPreviewJSON(preview *session.SwitchPreview, maxChars int) {
 	out := &switchPreviewJSONOutput{
-		ProgressSupported:   true,
+		ProgressSupported:   preview.Capability == session.CapabilityNativeResume,
 		SourceTitle:         preview.SourceTitle,
 		SourceTool:          preview.SourceTool,
 		SourceAccount:       preview.SourceAccount,
