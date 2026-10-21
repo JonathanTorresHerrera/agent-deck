@@ -41,8 +41,10 @@ func newAccountPresentation(account string, slotsConfigured bool) accountPresent
 	label := storedAccountLabel(account)
 	compactLabel := label
 	if account != "" {
+		// Show Jev's seat name and login email instead of the raw slot id;
 		// strconv.Quote output minus its surrounding quotes: still escaped.
-		compactLabel = label[1 : len(label)-1]
+		quotedSeat := strconv.Quote(seatDisplayLabel(account))
+		compactLabel = quotedSeat[1 : len(quotedSeat)-1]
 	}
 	compact := " @" + compactLabel
 	return accountPresentation{
