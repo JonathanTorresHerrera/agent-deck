@@ -15774,9 +15774,12 @@ func (h *Home) createSessionInGroupWithWorktreeAndOptions(
 
 				// Resolved for inst.ProjectPath (the primary repo, per #2093)
 				// so directory-local .agent-deck/config.toml overrides apply.
-				wtSettings, wtSettingsErr := session.GetWorktreeSettingsForDir(inst.ProjectPath)
+				wtSettings, dirLocalNotice, wtSettingsErr := session.GetWorktreeSettingsForDirWithNotice(inst.ProjectPath)
 				if wtSettingsErr != nil {
 					return sessionCreatedMsg{err: fmt.Errorf("invalid directory-local config: %w", wtSettingsErr), tempID: tempID}
+				}
+				if dirLocalNotice != "" {
+					setupWarning = formatSetupWarning(&dirLocalNoticeError{notice: dirLocalNotice})
 				}
 				wtResult := session.CreateMultiRepoWorktreesWithOptions(allPaths, parentDir, worktreeBranch, wtSettings)
 				for _, w := range wtResult.Warnings {
@@ -15881,7 +15884,7 @@ func createWorktreeWithSetupAndLog(backend vcs.Backend, wtPath, branch, sourceDi
 	var buf bytes.Buffer
 	// Resolved for sourceDir (the session's target directory, per #2093) so
 	// directory-local .agent-deck/config.toml overrides apply.
-	wtSettings, settingsErr := session.GetWorktreeSettingsForDir(sourceDir)
+	wtSettings, dirLocalNotice, settingsErr := session.GetWorktreeSettingsForDirWithNotice(sourceDir)
 	if settingsErr != nil {
 		return nil, fmt.Errorf("invalid directory-local config: %w", settingsErr)
 	}
@@ -15894,7 +15897,35 @@ func createWorktreeWithSetupAndLog(backend vcs.Backend, wtPath, branch, sourceDi
 	if setupErr != nil {
 		uiLog.Warn("worktree_setup_script_failed", slog.String("error", setupErr.Error()), slog.String("output", buf.String()))
 	}
-	return setupErr, nil
+	// A skipped untrusted dir-local config changes which settings applied;
+	// the footer is the only place the TUI user sees that (upstream #2885).
+	return withDirLocalNotice(setupErr, dirLocalNotice), nil
+}
+
+// dirLocalNoticeError carries the notice that a directory-local config was
+// skipped as untrusted, alongside the setup-script failure (if any), to the
+// footer warning. Unwrap keeps errors.Is/As working on the setup error.
+type dirLocalNoticeError struct {
+	notice string
+	setup  error
+}
+
+func (e *dirLocalNoticeError) Error() string {
+	if e.setup == nil {
+		return e.notice
+	}
+	return e.setup.Error() + "; " + e.notice
+}
+
+func (e *dirLocalNoticeError) Unwrap() error { return e.setup }
+
+// withDirLocalNotice attaches a skipped-dir-local-config notice to the
+// setup result for the footer; with no notice it returns setupErr as is.
+func withDirLocalNotice(setupErr error, notice string) error {
+	if notice == "" {
+		return setupErr
+	}
+	return &dirLocalNoticeError{notice: notice, setup: setupErr}
 }
 
 // setupWarningMaxLen bounds the setup-script failure text shown in the footer,
@@ -15905,6 +15936,19 @@ const setupWarningMaxLen = 300
 // sanitized footer line: ANSI stripped, whitespace collapsed, capped. The
 // verbose output stays in the log (see createWorktreeWithSetupAndLog).
 func formatSetupWarning(setupErr error) string {
+	// A skipped untrusted dir-local config rides along with (or instead of)
+	// the setup-script failure.
+	var notice *dirLocalNoticeError
+	if errors.As(setupErr, &notice) {
+		msg := strings.Join(strings.Fields(tmux.StripANSI(notice.notice)), " ")
+		if runes := []rune(msg); len(runes) > setupWarningMaxLen {
+			msg = string(runes[:setupWarningMaxLen]) + "…"
+		}
+		if notice.setup == nil {
+			return msg
+		}
+		return formatSetupWarning(notice.setup) + " · " + msg
+	}
 	msg := strings.Join(strings.Fields(tmux.StripANSI(setupErr.Error())), " ")
 	// Truncate by rune, not byte, so a multi-byte character is never split.
 	if runes := []rune(msg); len(runes) > setupWarningMaxLen {
@@ -16479,6 +16523,9 @@ type forkWithStateWorktreeDeps struct {
 	runSetup                  func(string, string, io.Writer, io.Writer, time.Duration) error
 	removeWorktree            func(string, string, bool) error
 	deleteBranch              func(string, string, bool) error
+	// dirLocalNotice names a directory-local config skipped as untrusted
+	// while resolving these settings; it is returned with the setup result.
+	dirLocalNotice string
 }
 
 // sparseSourceDir is the parent session's worktree: with
@@ -16495,16 +16542,19 @@ func defaultForkWithStateWorktreeDeps(sparseSourceDir string) forkWithStateWorkt
 	// inherit from, so SparseInheritOptions yields the same zero options
 	// either way and the lookup is skipped.
 	wtSettings := session.GetWorktreeSettings()
+	var dirLocalNotice string
 	if sparseSourceDir != "" {
-		if local, err := session.GetWorktreeSettingsForDir(sparseSourceDir); err != nil {
+		if local, notice, err := session.GetWorktreeSettingsForDirWithNotice(sparseSourceDir); err != nil {
 			uiLog.Warn("dir_local_config_invalid", slog.String("dir", sparseSourceDir), slog.String("error", err.Error()))
 			wtSettings.SparseCheckout = ""
 		} else {
 			wtSettings = local
+			dirLocalNotice = notice
 		}
 	}
 	createOpts := wtSettings.CreateOptions(sparseSourceDir)
 	return forkWithStateWorktreeDeps{
+		dirLocalNotice:            dirLocalNotice,
 		statPath:                  os.Stat,
 		mkdirAll:                  os.MkdirAll,
 		validateDestination:       git.ValidateForkWithStateDestination,
@@ -16839,6 +16889,11 @@ func (h *Home) forkSessionCmdWithOptions(
 					); err != nil {
 						return sessionForkedMsg{err: err, sourceID: sourceID}
 					}
+					// The jj path has no setup result to carry it, so report a
+					// skipped untrusted dir-local config here.
+					if _, notice, err := session.GetWorktreeSettingsForDirWithNotice(source.ProjectPath); err == nil && notice != "" {
+						setupWarning = formatSetupWarning(&dirLocalNoticeError{notice: notice})
+					}
 					// gitignored files are copied via git's exclude machinery; a jj
 					// repo with no git worktree root (pure jj, or a linked workspace)
 					// can't enumerate them, so tell the user instead of dropping them
@@ -17005,9 +17060,9 @@ func forkWithStateWorktree(parentPath, repoRoot, worktreePath, branch string, st
 		// the whole fork. The full output is logged; the concise error is
 		// returned so the caller can surface it in the UI.
 		uiLog.Warn("fork_with_state_setup_failed", slog.String("path", worktreePath), slog.String("err", scriptErr.Error()), slog.String("output", setupBuf.String()))
-		return scriptErr, nil
+		return withDirLocalNotice(scriptErr, deps.dirLocalNotice), nil
 	}
-	return nil, nil
+	return withDirLocalNotice(nil, deps.dirLocalNotice), nil
 }
 
 // forkWithStateWorkspaceJJ is the jujutsu equivalent of forkWithStateWorktree:

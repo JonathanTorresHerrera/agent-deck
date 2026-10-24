@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/docker"
+	"github.com/asheshgoplani/agent-deck/internal/sshcontrol"
 )
 
 // cursorSandboxHome and cursorSandboxWorkDir match internal/docker/config.go
@@ -212,7 +213,7 @@ fi
 // runCursorTrustRemoteScript executes a trust-seeding shell script on a remote
 // host over SSH. The script is passed on stdin to avoid embedding it in argv.
 func runCursorTrustRemoteScript(host, script string) (bool, error) {
-	_ = os.MkdirAll(sshControlDir, 0o700)
+	_ = sshcontrol.Dir()
 	args := append(sessionSSHConnOpts(), host, "sh", "-s")
 	ctx, cancel := context.WithTimeout(context.Background(), cursorTrustCommandTimeout)
 	defer cancel()
@@ -310,7 +311,7 @@ func PreAcceptCursorTrustInContainer(containerName, workspacePath string) error 
 func sessionSSHConnOpts() []string {
 	return []string{
 		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=" + sshControlDir + "/%r@%h:%p",
+		"-o", "ControlPath=" + sshcontrol.ControlPath(),
 		"-o", "ControlPersist=600",
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
