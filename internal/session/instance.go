@@ -1478,7 +1478,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 			// as a follow-up rather than attempted blind here.
 			if recorded := i.recordedClaudeSessionID(); recorded != "" {
 				return fmt.Sprintf(`%sexec %s%s --resume %s%s`,
-					bashExportPrefix, execEnvPrefix, claudeCmd, recorded, extraFlags)
+					bashExportPrefix, execEnvPrefix, claudeCmd, shellescape.Quote(recorded), extraFlags)
 			}
 			// #2301: with no owned id, `-c` used to ship unconditionally and
 			// let the CLI itself pick "the newest conversation in this
@@ -1527,7 +1527,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				if canResumeClaudeSession(i, opts.ResumeSessionID) {
 					// Session has conversation history - use normal --resume
 					return fmt.Sprintf(`%sexec %s%s --resume %s%s`,
-						bashExportPrefix, execEnvPrefix, claudeCmd, opts.ResumeSessionID, extraFlags)
+						bashExportPrefix, execEnvPrefix, claudeCmd, shellescape.Quote(opts.ResumeSessionID), extraFlags)
 				}
 				// Session was never interacted with - use --session-id with same UUID.
 				// CLAUDE_SESSION_ID is propagated via host-side SyncSessionIDsToTmux after start.
@@ -1544,9 +1544,16 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				// this deck computes, not proof the id is unused; claude exits
 				// on a reused one. See claudeStartIDForFlag.
 				freshID = i.claudeStartIDForFlag(freshID)
+				// freshID may be the session's own (settable) id: keep the
+				// `"<uuid>"` text for an ordinary id, but shell-quote anything
+				// else, since $(...) still runs inside double quotes.
+				sessionIDArg := `"` + freshID + `"`
+				if q := shellescape.Quote(freshID); q != freshID {
+					sessionIDArg = q
+				}
 				return fmt.Sprintf(
-					`%sexec %s%s --session-id "%s"%s`,
-					bashExportPrefix, execEnvPrefix, claudeCmd, freshID, extraFlags)
+					`%sexec %s%s --session-id %s%s`,
+					bashExportPrefix, execEnvPrefix, claudeCmd, sessionIDArg, extraFlags)
 			}
 			// No bound picker choice exists until Claude accepts the selection.
 			extraFlags = i.buildClaudeExtraFlagsWithName(opts, "")
@@ -1637,7 +1644,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 // (GetClaudeCommandForInstance never sees those — see its doc comment) —
 // in both cases there is no alias downstream to defer to.
 func (i *Instance) buildBashExportPrefix(skipConfigDirForCustomCommand bool) string {
-	prefix := fmt.Sprintf("export AGENTDECK_INSTANCE_ID=%s; export AGENTDECK_PROFILE=%s; ", i.ID, shellescape.Quote(sessionProfileEnvValue()))
+	prefix := fmt.Sprintf("export AGENTDECK_INSTANCE_ID=%s; export AGENTDECK_PROFILE=%s; ", shellescape.Quote(i.ID), shellescape.Quote(sessionProfileEnvValue()))
 	if IsClaudeConfigDirExplicitForInstance(i) && !skipConfigDirForCustomCommand {
 		// Issue #922 (reporter @bautrey): see applyWorkerScratchOverride.
 		configDir := i.applyWorkerScratchOverride(GetClaudeConfigDirForInstance(i))
@@ -2106,12 +2113,12 @@ func (i *Instance) buildGeminiCommand(baseCommand string) string {
 	// Determine model flag
 	modelFlag := ""
 	if i.GeminiModel != "" {
-		modelFlag = " --model " + i.GeminiModel
+		modelFlag = " --model " + shellescape.Quote(i.GeminiModel)
 	} else if i.GeminiSessionID == "" {
 		// Only apply default model for NEW sessions (not resumes)
 		userConfig, _ := LoadUserConfig()
 		if userConfig != nil && userConfig.Gemini.DefaultModel != "" {
-			modelFlag = " --model " + userConfig.Gemini.DefaultModel
+			modelFlag = " --model " + shellescape.Quote(userConfig.Gemini.DefaultModel)
 		}
 	}
 
@@ -2135,7 +2142,7 @@ func (i *Instance) buildGeminiCommand(baseCommand string) string {
 			return envPrefix + fmt.Sprintf(
 				"%s --resume %s%s%s%s",
 				cmd,
-				i.GeminiSessionID,
+				shellescape.Quote(i.GeminiSessionID),
 				yoloFlag,
 				modelFlag,
 				identityFlag,
@@ -2183,7 +2190,7 @@ func (i *Instance) buildOpenCodeCommand(baseCommand string) string {
 		// OPENCODE_SESSION_ID is propagated via host-side SetEnvironment after tmux start.
 		if i.OpenCodeSessionID != "" {
 			return envPrefix + fmt.Sprintf("%s -s %s%s",
-				cmd, i.OpenCodeSessionID, extraFlags)
+				cmd, shellescape.Quote(i.OpenCodeSessionID), extraFlags)
 		}
 
 		// Start OpenCode fresh - session ID will be captured async after startup
@@ -2214,10 +2221,10 @@ func (i *Instance) buildOpenCodeExtraFlags() string {
 
 	var flags string
 	if opts.Model != "" {
-		flags += " -m " + opts.Model
+		flags += " -m " + shellescape.Quote(opts.Model)
 	}
 	if opts.Agent != "" {
-		flags += " --agent " + opts.Agent
+		flags += " --agent " + shellescape.Quote(opts.Agent)
 	}
 	return flags
 }
@@ -2525,7 +2532,7 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// $(...) (a title of `x` printed "bash: x: command not found" at every
 	// spawn and lost the backticks). Same quoting as the passthrough branch.
 	agentdeckEnvPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_TITLE=%s AGENTDECK_TOOL=%s AGENTDECK_PROFILE=%s ",
-		i.ID, shellescape.Quote(i.Title), i.Tool, shellescape.Quote(sessionProfileEnvValue()))
+		shellescape.Quote(i.ID), shellescape.Quote(i.Title), i.Tool, shellescape.Quote(sessionProfileEnvValue()))
 	envPrefix += agentdeckEnvPrefix
 
 	// Passthrough: if the tool is literally "codex" and user gave a custom command
@@ -2582,12 +2589,12 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 			slog.String("title", i.Title),
 			slog.String("sid", i.CodexSessionID))
 		return envPrefix + fmt.Sprintf("%s%s%s%s%s fork %s",
-			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, i.CodexSessionID)
+			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, shellescape.Quote(i.CodexSessionID))
 	}
 
 	if i.CodexSessionID != "" {
 		return envPrefix + fmt.Sprintf("%s%s%s%s%s resume %s",
-			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, i.CodexSessionID)
+			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, shellescape.Quote(i.CodexSessionID))
 	}
 
 	return envPrefix + command + yoloFlag + modelFlag + reasoningFlag + identityFlag
@@ -4524,7 +4531,7 @@ func (i *Instance) buildShellPassthroughCommand(baseCommand string) string {
 	switch matched {
 	case "claude":
 		instanceIDPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_PROFILE=%s ",
-			i.ID, shellescape.Quote(sessionProfileEnvValue()))
+			shellescape.Quote(i.ID), shellescape.Quote(sessionProfileEnvValue()))
 		// claudeCmd/hasCustomClaudeCommand mirrors buildClaudeCommandWithMessage's
 		// own gate exactly (instance.go, "the alias handles it"): when a
 		// configured [claude].command (conductor/group/global, e.g. "cdw") is
@@ -4601,7 +4608,7 @@ func (i *Instance) buildShellPassthroughCommand(baseCommand string) string {
 		// substitution inside the double quotes it produces — a title like
 		// `x$(touch /tmp/pwned)` would execute at every spawn otherwise.
 		agentdeckEnvPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_TITLE=%s AGENTDECK_TOOL=%s AGENTDECK_PROFILE=%s ",
-			i.ID, shellescape.Quote(i.Title), matched, shellescape.Quote(sessionProfileEnvValue()))
+			shellescape.Quote(i.ID), shellescape.Quote(i.Title), matched, shellescape.Quote(sessionProfileEnvValue()))
 		// CODEX_HOME selects which account's Codex config/credentials the
 		// spawned process reads — injecting it ahead of an explicitly
 		// configured non-canonical binary (e.g. "codex-nightly", itself
@@ -10703,7 +10710,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 			slog.String("path", logging.SanitizeValue(i.ProjectPath)),
 			slog.String("reason", "identity_guard_fresh_session"))
 		return fmt.Sprintf("%s%s%s --session-id %s%s",
-			envPrefix, bashExportPrefix, claudeCmd, fresh, extraFlags)
+			envPrefix, bashExportPrefix, claudeCmd, shellescape.Quote(fresh), extraFlags)
 	}
 
 	// #1815 / CodeQL go/log-injection: i.ClaudeSessionID, i.ID and
@@ -10763,7 +10770,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 	// (which silently fails inside Docker sandbox containers).
 	if useResume {
 		return fmt.Sprintf("%s%sexec %s --resume %s%s",
-			envPrefix, bashExportPrefix, claudeCmd, i.ClaudeSessionID, extraFlags)
+			envPrefix, bashExportPrefix, claudeCmd, shellescape.Quote(i.ClaudeSessionID), extraFlags)
 	}
 	// Session was never interacted with - use --session-id to create fresh session.
 	// Unless it HAS been: this branch is reached whenever the transcript is not
@@ -10773,7 +10780,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 	// it, so claudeStartIDForFlag mints a fresh one when the id is really in use.
 	startID := i.claudeStartIDForFlag(i.ClaudeSessionID)
 	return fmt.Sprintf("%s%sexec %s --session-id %s%s",
-		envPrefix, bashExportPrefix, claudeCmd, startID, extraFlags)
+		envPrefix, bashExportPrefix, claudeCmd, shellescape.Quote(startID), extraFlags)
 }
 
 // SetGeminiModel sets the Gemini model for this session and triggers a restart if running.
@@ -11205,10 +11212,10 @@ func (i *Instance) buildClaudeForkCommandForTarget(target *Instance, opts *Claud
 	// #1815: minted for the fork target — vouched ownership.
 	target.markClaudeSessionIDVerified()
 	cmd := fmt.Sprintf(
-		`cd '%s' && `+
+		`cd %s && `+
 			`%sexec claude --session-id "%s" --resume %s --fork-session%s`,
-		workDir,
-		bashExportPrefix, forkUUID, i.ClaudeSessionID, extraFlags)
+		shellQuote(workDir),
+		bashExportPrefix, forkUUID, shellescape.Quote(i.ClaudeSessionID), extraFlags)
 	cmd, err := i.applyWrapper(cmd)
 	if err != nil {
 		return "", err
