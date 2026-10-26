@@ -30,12 +30,20 @@ type Viewer struct {
 	// User is the account the client runs as (tmux >= 3.2 reports it; older
 	// servers fall back to the owner of the tty). Empty when unknown.
 	User string `json:"user,omitempty"`
+	// PID is the tmux client process (client_pid); 0 when tmux did not say.
+	PID int `json:"pid,omitempty"`
+	// Device names the machine the person is looking from: "PC" for a local
+	// terminal, "iPad" / "Mac" / a tailnet host name for an SSH client
+	// (viewer_device.go). Empty when it could not be told, in which case
+	// DisplayName falls back to User.
+	Device string `json:"device,omitempty"`
 }
 
 // viewerFormat is the list-clients format the viewer listings parse. Tab
 // separated so an empty field (client_user on tmux < 3.2) keeps its column;
 // the session name comes first so one server-wide listing can be grouped.
-const viewerFormat = "#{session_name}\t#{client_name}\t#{client_tty}\t#{client_width}x#{client_height}\t#{client_activity}\t#{client_user}\t#{client_control_mode}"
+// client_pid is last so older listings without it still parse.
+const viewerFormat = "#{session_name}\t#{client_name}\t#{client_tty}\t#{client_width}x#{client_height}\t#{client_activity}\t#{client_user}\t#{client_control_mode}\t#{client_pid}"
 
 // ListViewers returns the people attached to sessionName on socketName, most
 // recently active first. An error means tmux could not be asked (timeout,
@@ -51,7 +59,7 @@ func ListViewers(ctx context.Context, socketName, sessionName string) ([]Viewer,
 		}
 		return nil, err
 	}
-	return parseViewers(string(out), ttyOwner)[sessionName], nil
+	return parseViewers(string(out), ttyOwner, clientDeviceLabel)[sessionName], nil
 }
 
 // ListAllViewers returns the viewers of every session on socketName, keyed
@@ -67,7 +75,7 @@ func ListAllViewers(ctx context.Context, socketName string) (map[string][]Viewer
 		}
 		return nil, err
 	}
-	return parseViewers(string(out), ttyOwner), nil
+	return parseViewers(string(out), ttyOwner, clientDeviceLabel), nil
 }
 
 // viewersListingIsEmpty tells a list-clients failure that is tmux's own
@@ -91,8 +99,9 @@ func viewersListingIsEmpty(err error) bool {
 
 // parseViewers decodes list-clients output into viewers by session name,
 // each list most recently active first. owner resolves a tty to its owning
-// user when tmux did not report one.
-func parseViewers(out string, owner func(tty string) string) map[string][]Viewer {
+// user when tmux did not report one; device names the machine behind a
+// client pid (nil leaves Device empty).
+func parseViewers(out string, owner func(tty string) string, device func(pid int) string) map[string][]Viewer {
 	bySession := map[string][]Viewer{}
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
@@ -112,6 +121,14 @@ func parseViewers(out string, owner func(tty string) string) map[string][]Viewer
 		}
 		if v.User == "" && owner != nil {
 			v.User = owner(v.TTY)
+		}
+		if len(fields) > 7 {
+			if pid, err := strconv.Atoi(strings.TrimSpace(fields[7])); err == nil && pid > 0 {
+				v.PID = pid
+			}
+		}
+		if v.PID > 0 && device != nil {
+			v.Device = device(v.PID)
 		}
 		bySession[fields[0]] = append(bySession[fields[0]], v)
 	}
@@ -159,8 +176,12 @@ func (v Viewer) Label(now time.Time) string {
 	return fmt.Sprintf("%s (%dx%d, %s)", v.DisplayName(), v.Width, v.Height, v.ActivityLabel(now))
 }
 
-// DisplayName is the user when known, else the tty (never empty).
+// DisplayName is the device when known ("PC", "iPad", ...), else the user,
+// else the tty (never empty).
 func (v Viewer) DisplayName() string {
+	if v.Device != "" {
+		return v.Device
+	}
 	if v.User != "" {
 		return v.User
 	}

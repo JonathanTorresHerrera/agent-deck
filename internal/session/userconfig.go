@@ -282,6 +282,10 @@ type UserConfig struct {
 	// can only turn telemetry OFF or point it at a self-hosted endpoint.
 	Telemetry TelemetrySettings `toml:"telemetry,omitempty"`
 
+	// Viewers configures the viewers badge: how attached terminals are
+	// named by device (fork, WO-ADK-BACKPORT-01).
+	Viewers ViewerSettings `toml:"viewers,omitempty"`
+
 	// Terminal defines outer-terminal chrome settings — sequences agent-deck
 	// writes directly to the host terminal (iTerm2 badge, etc), distinct
 	// from anything tmux draws. Empty/absent uses defaults; see TerminalSettings.
@@ -1011,6 +1015,24 @@ type FeedbackSettings struct {
 }
 
 // TelemetrySettings configures opt-in usage telemetry (TELEMETRY.md).
+// ViewerSettings is config.toml's [viewers] section: how the terminals
+// attached to a session (the 👁️ badge, the preview's viewers line and
+// `session viewers`) are named.
+//
+//	[viewers.device_labels]
+//	"100.74.190.0" = "iPad"
+//	"192.168.5.66" = "OldRig"
+//
+// A local terminal shows "PC". An SSH client is looked up by the address it
+// connected from (the first field of its SSH_CONNECTION): this map first,
+// then the built-in table, then the tailnet (`tailscale status`: "iPad" /
+// "iPhone" for iOS, "Mac" for macOS, otherwise the host name), else the
+// address itself.
+type ViewerSettings struct {
+	// DeviceLabels maps an SSH client address to the label shown for it.
+	DeviceLabels map[string]string `toml:"device_labels,omitempty"`
+}
+
 type TelemetrySettings struct {
 	// Disabled forces telemetry off regardless of stored consent, like
 	// AGENTDECK_TELEMETRY=0. It cannot enable telemetry.

@@ -90,6 +90,17 @@ func initTelemetrySettings() {
 	telemetry.SetConfigLevel(cfg.Telemetry.Level)
 }
 
+// initViewerSettings passes the config.toml [viewers] section to internal/tmux,
+// which names the terminals attached to a session by device (fork). An
+// unreadable config keeps the built-in labels.
+func initViewerSettings() {
+	cfg, err := session.LoadUserConfig()
+	if err != nil || cfg == nil {
+		return
+	}
+	tmux.SetViewerDeviceLabels(cfg.Viewers.DeviceLabels)
+}
+
 // telemetrySignalClose flushes the TUI's pending telemetry (activity hour,
 // app.exit) when a signal ends the process; set once the home model exists.
 var telemetrySignalClose atomic.Pointer[func(telemetry.ExitKind)]
@@ -339,6 +350,7 @@ func main() {
 	// check (printUpdateNotice, `update`, `version`). See the doc comment.
 	initUpdateSettings()
 	initTelemetrySettings()
+	initViewerSettings()
 	telemetry.SetProcess(Version, telemetry.SurfaceCLI)
 
 	// Extract global -p/--profile flag before subcommand dispatch

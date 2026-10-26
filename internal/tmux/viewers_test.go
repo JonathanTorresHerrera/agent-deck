@@ -33,7 +33,7 @@ func TestParseViewers(t *testing.T) {
 		}
 		return ""
 	}
-	got := parseViewers(out, owner)
+	got := parseViewers(out, owner, nil)
 
 	require.Len(t, got, 2)
 	a := got["agentdeck_a"]
