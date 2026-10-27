@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -80,9 +81,17 @@ func canonicalDir(p string) string {
 		return ""
 	}
 	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return filepath.Clean(r)
+		p = r
 	}
-	return filepath.Clean(p)
+	p = filepath.Clean(p)
+	// Windows drive mounts are case-insensitive even when rollout metadata and
+	// the Deck registry use different spellings of the same directory.
+	if len(p) >= 6 && strings.HasPrefix(p, "/mnt/") &&
+		((p[5] >= 'a' && p[5] <= 'z') || (p[5] >= 'A' && p[5] <= 'Z')) &&
+		(len(p) == 6 || p[6] == '/') {
+		return strings.ToLower(p)
+	}
+	return p
 }
 
 type codexRolloutCandidate struct {
