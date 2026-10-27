@@ -115,24 +115,23 @@ func TestPatch45_BadgeAfterStatusGlyph(t *testing.T) {
 	home.showProviderBadge = true
 	var b strings.Builder
 	snap := home.getSessionRenderSnapshot()
-	for _, it := range home.flatItems {
-		if it.Type == session.ItemTypeSession && it.Session.ID == home.instances[2].ID {
-			home.renderSessionItem(&b, it, false, snap, 80)
+	renderGrok := func(width int) string {
+		b.Reset()
+		for _, it := range home.flatItems {
+			if it.Type == session.ItemTypeSession && it.Session.ID == home.instances[2].ID {
+				home.renderSessionItem(&b, it, false, snap, width)
+			}
 		}
+		return stripAnsi(b.String())
 	}
-	row := stripAnsi(b.String())
-	if !strings.Contains(row, "◐ X ") {
-		t.Fatalf("grok row should read '◐ X <title>': %q", row)
+	for _, width := range []int{80, 31} { // 31 columns approximates preview_pct=74 at 120 columns.
+		if row := renderGrok(width); !strings.Contains(row, "◐ X ") {
+			t.Fatalf("grok row at width %d should read '◐ X <title>': %q", width, row)
+		}
 	}
 	home.showProviderBadge = false
-	b.Reset()
-	for _, it := range home.flatItems {
-		if it.Type == session.ItemTypeSession && it.Session.ID == home.instances[2].ID {
-			home.renderSessionItem(&b, it, false, snap, 80)
-		}
-	}
-	if strings.Contains(stripAnsi(b.String()), " X ") {
-		t.Fatalf("badge must be opt-in: %q", stripAnsi(b.String()))
+	if row := renderGrok(31); strings.Contains(row, " X ") {
+		t.Fatalf("badge must be opt-in: %q", row)
 	}
 }
 

@@ -22421,7 +22421,7 @@ func (h *Home) renderSessionItem(
 	}
 
 	// Patch 45 (provider badge): one coloured letter after the status glyph.
-	if h.showProviderBadge && (listWidth <= 0 || listWidth >= 40) {
+	if h.showProviderBadge {
 		status += " " + renderProviderBadge(instTool, selected)
 	}
 

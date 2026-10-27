@@ -94,6 +94,25 @@ func TestCodexRecoveryNeverLaunchesBlankOverRecordedHistory(t *testing.T) {
 	require.Equal(t, "01a154eb-0000-7000-8000-000000000000", inst.CodexSessionID)
 }
 
+func TestCodexRecoveryMatchesWindowsDrivePathCase(t *testing.T) {
+	home := withTempHome(t)
+	t.Setenv("CODEX_HOME", home)
+	id := "01a14c0c-85c6-7310-b63a-3e450ab5c59a"
+	writeRollout(t, home, id, "/mnt/d/Dev_Projects/agent-deck", "", "", time.Now())
+	inst := &Instance{ID: "casefold", Tool: "codex", Command: "codex", ProjectPath: "/mnt/d/dev_projects/agent-deck", CodexSessionID: id}
+	require.NoError(t, inst.guardCodexRecovery(true))
+	require.Equal(t, id, inst.CodexSessionID)
+
+	inst.CodexSessionID = ""
+	history, err := codexHasMainHistory(inst)
+	require.NoError(t, err)
+	require.True(t, history, "the case variant must still count as existing history")
+
+	inst.ProjectPath = "/home/jtorres/dev_projects/agent-deck"
+	inst.CodexSessionID = id
+	require.ErrorContains(t, inst.guardCodexRecovery(true), "not a verified main thread")
+}
+
 func TestCodexNewestResolversExcludeNestedSubagentSource(t *testing.T) {
 	home := withTempHome(t)
 	t.Setenv("CODEX_HOME", home)
