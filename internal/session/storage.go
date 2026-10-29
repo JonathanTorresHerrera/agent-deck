@@ -14,6 +14,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/health"
 	"github.com/asheshgoplani/agent-deck/internal/logging"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
+	"github.com/asheshgoplani/agent-deck/internal/termtext"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -287,6 +288,15 @@ func NewStorageWithProfile(profile string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to migrate state database: %w", err)
 	}
 
+	// Identity check after the schema migration (which only creates or
+	// upgrades tables) and before any session row is read or written: the
+	// store must belong to the profile this process resolved (see
+	// statedb.BindProfile).
+	if err := db.BindProfile(statedb.ProfileNameForDir(profileDir)); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("profile %q: %w", effectiveProfile, err)
+	}
+
 	// Auto-migrate from sessions.json if state.db is empty
 	jsonPath := filepath.Join(profileDir, "sessions.json")
 	if _, jsonErr := os.Stat(jsonPath); jsonErr == nil {
@@ -345,6 +355,15 @@ func newReadOnlyStorageWithProfile(profile string, open func(string) (*statedb.S
 	db, err := open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open state database read-only: %w", err)
+	}
+	// A read-only handle cannot write to the wrong store, so a stamp it cannot
+	// confirm is a warning, never a refusal: the statusline, the remote
+	// catalog and other readers keep working while the writable open reports
+	// the mismatch.
+	if err := db.BindProfile(statedb.ProfileNameForDir(filepath.Dir(dbPath))); err != nil {
+		storageLog.Warn("profile_stamp_unconfirmed_read_only",
+			slog.String("profile", effectiveProfile),
+			slog.String("error", err.Error()))
 	}
 	return &Storage{db: db, dbPath: dbPath, profile: effectiveProfile}, nil
 }
@@ -631,6 +650,7 @@ func (s *Storage) DeleteInstanceDeferredCleanup(id string) (func(), error) {
 		if err := pruneHookArtifacts(id); err != nil {
 			storageLog.Warn("hook_cleanup_failed", slog.String("id", id), slog.String("error", err.Error()))
 		}
+		removeLaunchEnvFiles(id)
 	}, nil
 }
 
@@ -1246,7 +1266,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 
 		instances[i] = &InstanceData{
 			ID:                        r.ID,
-			Title:                     r.Title,
+			Title:                     termtext.Clean(r.Title),
 			ProjectPath:               r.ProjectPath,
 			GroupPath:                 r.GroupPath,
 			Order:                     r.Order,
@@ -1387,7 +1407,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 
 		data.Instances[i] = &InstanceData{
 			ID:                        r.ID,
-			Title:                     r.Title,
+			Title:                     termtext.Clean(r.Title),
 			ProjectPath:               r.ProjectPath,
 			GroupPath:                 r.GroupPath,
 			Order:                     r.Order,
@@ -1549,7 +1569,11 @@ func (s *Storage) LoadRecentSessions() ([]*statedb.RecentSessionRow, error) {
 		return nil, fmt.Errorf("storage database not initialized")
 	}
 
-	return s.db.LoadRecentSessions()
+	rows, err := s.db.LoadRecentSessions()
+	for _, r := range rows {
+		r.Title = termtext.Clean(r.Title) // rendered in the TUI's recent list
+	}
+	return rows, err
 }
 
 // GetDBPathForProfile returns the path to the state.db file for a specific profile.
@@ -1703,7 +1727,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 
 		inst := &Instance{
 			ID:                           instData.ID,
-			Title:                        instData.Title,
+			Title:                        termtext.Clean(instData.Title),
 			ProjectPath:                  projectPath,
 			GroupPath:                    groupPath,
 			Order:                        instData.Order,

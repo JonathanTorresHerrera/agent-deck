@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/asheshgoplani/agent-deck/internal/sshcontrol"
 	"io"
 	"log/slog"
 	"maps"
@@ -36,6 +37,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/send"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/telemetry"
+	"github.com/asheshgoplani/agent-deck/internal/termtext"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
 )
 
@@ -1069,6 +1071,7 @@ func (inst *Instance) GetTitleThreadSafe() string {
 // reapplication) must go through this rather than assigning Title directly,
 // or GetTitleThreadSafe's read lock buys nothing.
 func (inst *Instance) SetTitleThreadSafe(t string) {
+	t = termtext.Clean(t)
 	inst.mu.Lock()
 	inst.Title = t
 	inst.mu.Unlock()
@@ -1091,13 +1094,13 @@ func (inst *Instance) SetToolThreadSafe(t string) {
 // UPDATE is not.
 func (inst *Instance) MarkAccessed() {
 	inst.LastAccessedAt = time.Now()
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteLastAccessed(inst.ID, inst.LastAccessedAt); err != nil {
-			sessionLog.Debug("last_accessed_persist_failed",
-				slog.String("instance", inst.ID),
-				slog.String("error", err.Error()),
-			)
-		}
+	if err := inst.withOwningStateDB(func(db *statedb.StateDB) error {
+		return db.WriteLastAccessed(inst.ID, inst.LastAccessedAt)
+	}); err != nil && !errors.Is(err, errNoStateDB) {
+		sessionLog.Debug("last_accessed_persist_failed",
+			slog.String("instance", inst.ID),
+			slog.String("error", err.Error()),
+		)
 	}
 }
 
@@ -1200,6 +1203,7 @@ func (inst *Instance) ClearParent() {
 
 // NewInstance creates a new session instance
 func NewInstance(title, projectPath string) *Instance {
+	title = termtext.Clean(title) // see NewInstanceWithTool
 	id := GenerateID()
 	// Seed the tmux socket from the installation-wide config. Callers that
 	// want to override (the `--tmux-socket` CLI flag) set
@@ -1291,6 +1295,9 @@ func NewInstanceWithGroup(title, projectPath, groupPath string) *Instance {
 
 // NewInstanceWithTool creates a new session with tool-specific initialization
 func NewInstanceWithTool(title, projectPath, tool string) *Instance {
+	// The title is printed by `list` and rendered in the TUI and the tmux
+	// status line; a control character in it could drive the terminal.
+	title = termtext.Clean(title)
 	id := GenerateID()
 	socket := GetTmuxSettings().GetSocketName()
 	tmuxSess := tmux.NewSession(title, projectPath)
@@ -1472,7 +1479,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 			// as a follow-up rather than attempted blind here.
 			if recorded := i.recordedClaudeSessionID(); recorded != "" {
 				return fmt.Sprintf(`%sexec %s%s --resume %s%s`,
-					bashExportPrefix, execEnvPrefix, claudeCmd, recorded, extraFlags)
+					bashExportPrefix, execEnvPrefix, claudeCmd, shellescape.Quote(recorded), extraFlags)
 			}
 			// #2301: with no owned id, `-c` used to ship unconditionally and
 			// let the CLI itself pick "the newest conversation in this
@@ -1521,7 +1528,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				if canResumeClaudeSession(i, opts.ResumeSessionID) {
 					// Session has conversation history - use normal --resume
 					return fmt.Sprintf(`%sexec %s%s --resume %s%s`,
-						bashExportPrefix, execEnvPrefix, claudeCmd, opts.ResumeSessionID, extraFlags)
+						bashExportPrefix, execEnvPrefix, claudeCmd, shellescape.Quote(opts.ResumeSessionID), extraFlags)
 				}
 				// Session was never interacted with - use --session-id with same UUID.
 				// CLAUDE_SESSION_ID is propagated via host-side SyncSessionIDsToTmux after start.
@@ -1538,9 +1545,16 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 				// this deck computes, not proof the id is unused; claude exits
 				// on a reused one. See claudeStartIDForFlag.
 				freshID = i.claudeStartIDForFlag(freshID)
+				// freshID may be the session's own (settable) id: keep the
+				// `"<uuid>"` text for an ordinary id, but shell-quote anything
+				// else, since $(...) still runs inside double quotes.
+				sessionIDArg := `"` + freshID + `"`
+				if q := shellescape.Quote(freshID); q != freshID {
+					sessionIDArg = q
+				}
 				return fmt.Sprintf(
-					`%sexec %s%s --session-id "%s"%s`,
-					bashExportPrefix, execEnvPrefix, claudeCmd, freshID, extraFlags)
+					`%sexec %s%s --session-id %s%s`,
+					bashExportPrefix, execEnvPrefix, claudeCmd, sessionIDArg, extraFlags)
 			}
 			// No bound picker choice exists until Claude accepts the selection.
 			extraFlags = i.buildClaudeExtraFlagsWithName(opts, "")
@@ -1631,7 +1645,7 @@ func (i *Instance) buildClaudeCommandWithMessage(baseCommand, message string) st
 // (GetClaudeCommandForInstance never sees those — see its doc comment) —
 // in both cases there is no alias downstream to defer to.
 func (i *Instance) buildBashExportPrefix(skipConfigDirForCustomCommand bool) string {
-	prefix := fmt.Sprintf("export AGENTDECK_INSTANCE_ID=%s; export AGENTDECK_PROFILE=%s; ", i.ID, shellescape.Quote(sessionProfileEnvValue()))
+	prefix := fmt.Sprintf("export AGENTDECK_INSTANCE_ID=%s; export AGENTDECK_PROFILE=%s; ", shellescape.Quote(i.ID), shellescape.Quote(sessionProfileEnvValue()))
 	if IsClaudeConfigDirExplicitForInstance(i) && !skipConfigDirForCustomCommand {
 		// Issue #922 (reporter @bautrey): see applyWorkerScratchOverride.
 		configDir := i.applyWorkerScratchOverride(GetClaudeConfigDirForInstance(i))
@@ -2100,12 +2114,12 @@ func (i *Instance) buildGeminiCommand(baseCommand string) string {
 	// Determine model flag
 	modelFlag := ""
 	if i.GeminiModel != "" {
-		modelFlag = " --model " + i.GeminiModel
+		modelFlag = " --model " + shellescape.Quote(i.GeminiModel)
 	} else if i.GeminiSessionID == "" {
 		// Only apply default model for NEW sessions (not resumes)
 		userConfig, _ := LoadUserConfig()
 		if userConfig != nil && userConfig.Gemini.DefaultModel != "" {
-			modelFlag = " --model " + userConfig.Gemini.DefaultModel
+			modelFlag = " --model " + shellescape.Quote(userConfig.Gemini.DefaultModel)
 		}
 	}
 
@@ -2129,7 +2143,7 @@ func (i *Instance) buildGeminiCommand(baseCommand string) string {
 			return envPrefix + fmt.Sprintf(
 				"%s --resume %s%s%s%s",
 				cmd,
-				i.GeminiSessionID,
+				shellescape.Quote(i.GeminiSessionID),
 				yoloFlag,
 				modelFlag,
 				identityFlag,
@@ -2177,7 +2191,7 @@ func (i *Instance) buildOpenCodeCommand(baseCommand string) string {
 		// OPENCODE_SESSION_ID is propagated via host-side SetEnvironment after tmux start.
 		if i.OpenCodeSessionID != "" {
 			return envPrefix + fmt.Sprintf("%s -s %s%s",
-				cmd, i.OpenCodeSessionID, extraFlags)
+				cmd, shellescape.Quote(i.OpenCodeSessionID), extraFlags)
 		}
 
 		// Start OpenCode fresh - session ID will be captured async after startup
@@ -2208,10 +2222,10 @@ func (i *Instance) buildOpenCodeExtraFlags() string {
 
 	var flags string
 	if opts.Model != "" {
-		flags += " -m " + opts.Model
+		flags += " -m " + shellescape.Quote(opts.Model)
 	}
 	if opts.Agent != "" {
-		flags += " --agent " + opts.Agent
+		flags += " --agent " + shellescape.Quote(opts.Agent)
 	}
 	return flags
 }
@@ -2519,7 +2533,7 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 	// $(...) (a title of `x` printed "bash: x: command not found" at every
 	// spawn and lost the backticks). Same quoting as the passthrough branch.
 	agentdeckEnvPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_TITLE=%s AGENTDECK_TOOL=%s AGENTDECK_PROFILE=%s ",
-		i.ID, shellescape.Quote(i.Title), i.Tool, shellescape.Quote(sessionProfileEnvValue()))
+		shellescape.Quote(i.ID), shellescape.Quote(i.Title), i.Tool, shellescape.Quote(sessionProfileEnvValue()))
 	envPrefix += agentdeckEnvPrefix
 
 	// Passthrough: if the tool is literally "codex" and user gave a custom command
@@ -2576,12 +2590,12 @@ func (i *Instance) buildCodexCommand(baseCommand string) string {
 			slog.String("title", i.Title),
 			slog.String("sid", i.CodexSessionID))
 		return envPrefix + fmt.Sprintf("%s%s%s%s%s fork %s",
-			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, i.CodexSessionID)
+			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, shellescape.Quote(i.CodexSessionID))
 	}
 
 	if i.CodexSessionID != "" {
 		return envPrefix + fmt.Sprintf("%s%s%s%s%s resume %s",
-			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, i.CodexSessionID)
+			command, yoloFlag, modelFlag, reasoningFlag, identityFlag, shellescape.Quote(i.CodexSessionID))
 	}
 
 	return envPrefix + command + yoloFlag + modelFlag + reasoningFlag + identityFlag
@@ -4518,7 +4532,7 @@ func (i *Instance) buildShellPassthroughCommand(baseCommand string) string {
 	switch matched {
 	case "claude":
 		instanceIDPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_PROFILE=%s ",
-			i.ID, shellescape.Quote(sessionProfileEnvValue()))
+			shellescape.Quote(i.ID), shellescape.Quote(sessionProfileEnvValue()))
 		// claudeCmd/hasCustomClaudeCommand mirrors buildClaudeCommandWithMessage's
 		// own gate exactly (instance.go, "the alias handles it"): when a
 		// configured [claude].command (conductor/group/global, e.g. "cdw") is
@@ -4595,7 +4609,7 @@ func (i *Instance) buildShellPassthroughCommand(baseCommand string) string {
 		// substitution inside the double quotes it produces — a title like
 		// `x$(touch /tmp/pwned)` would execute at every spawn otherwise.
 		agentdeckEnvPrefix := fmt.Sprintf("AGENTDECK_INSTANCE_ID=%s AGENTDECK_TITLE=%s AGENTDECK_TOOL=%s AGENTDECK_PROFILE=%s ",
-			i.ID, shellescape.Quote(i.Title), matched, shellescape.Quote(sessionProfileEnvValue()))
+			shellescape.Quote(i.ID), shellescape.Quote(i.Title), matched, shellescape.Quote(sessionProfileEnvValue()))
 		// CODEX_HOME selects which account's Codex config/credentials the
 		// spawned process reads — injecting it ahead of an explicitly
 		// configured non-canonical binary (e.g. "codex-nightly", itself
@@ -6460,6 +6474,18 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 		time.Since(i.lastErrorCheck) < errorRecheckInterval {
 		return nil // Skip - still in error/stopped, checked recently
 	}
+	// An error/stopped row whose session this tick's listing shows absent is
+	// answered without forking has-session + list-panes. With ~130 ghosts those
+	// two forks per row per 30s pushed whole status passes past the 250 ms
+	// health budget. A recheck of a confirmed ghost stays dead as is; a first
+	// sighting still runs the terminated-pane classification below.
+	if (i.Status == StatusError || i.Status == StatusStopped) && i.tmuxSession.AbsentFromCache() {
+		if !i.lastErrorCheck.IsZero() {
+			i.lastErrorCheck = time.Now()
+			return nil
+		}
+		exists, checkedExists = false, true
+	}
 
 	// Check if tmux session exists
 	if !checkedExists {
@@ -7384,13 +7410,16 @@ func (i *Instance) bindCodexSessionFromHook(sessionID, hookEvent string) {
 	// producing a runaway loop of fresh "rebind" decisions on every
 	// poll. WriteCodexSessionBinding rewrites only the typed schema
 	// fields via json_set, leaving every other tool_data key untouched.
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteCodexSessionBinding(i.ID, sessionID, i.CodexDetectedAt); err != nil {
-			sessionLog.Warn("codex_session_rebind_persist_failed",
-				slog.String("instance_id", i.ID),
-				slog.String("new_id", sessionID),
-				slog.String("error", err.Error()))
-		}
+	// Web mutators save live instances through a short-lived Storage, which
+	// can leave the owning handle closed; withOwningStateDB reopens the owning
+	// path then, never an unrelated profile's global database.
+	if err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+		return db.WriteCodexSessionBinding(i.ID, sessionID, i.CodexDetectedAt)
+	}); err != nil && !errors.Is(err, errNoStateDB) {
+		sessionLog.Warn("codex_session_rebind_persist_failed",
+			slog.String("instance_id", i.ID),
+			slog.String("new_id", sessionID),
+			slog.String("error", err.Error()))
 	}
 }
 
@@ -7422,13 +7451,13 @@ func (i *Instance) bindGeminiSessionFromHook(sessionID, hookEvent string) {
 	// row and clobbering this instance's in-memory state. The targeted
 	// json_set UPDATE atomically rewrites only $.gemini_session_id and
 	// $.gemini_detected_at, preserving the rest of tool_data.
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteGeminiSessionBinding(i.ID, sessionID, i.GeminiDetectedAt); err != nil {
-			sessionLog.Warn("gemini_session_rebind_persist_failed",
-				slog.String("instance_id", i.ID),
-				slog.String("new_id", sessionID),
-				slog.String("error", err.Error()))
-		}
+	if err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+		return db.WriteGeminiSessionBinding(i.ID, sessionID, i.GeminiDetectedAt)
+	}); err != nil && !errors.Is(err, errNoStateDB) {
+		sessionLog.Warn("gemini_session_rebind_persist_failed",
+			slog.String("instance_id", i.ID),
+			slog.String("new_id", sessionID),
+			slog.String("error", err.Error()))
 	}
 }
 
@@ -8098,12 +8127,13 @@ func (i *Instance) clearSessionBindingForFreshStart() {
 		i.GenericSessionCommand = ""
 		i.GenericSessionLocation = ""
 		i.genericSessionIDCleared = true
-		if db := statedb.GetGlobal(); db != nil {
-			// The flag above means a later save re-applies this clear, so the
-			// outcome is eventually right either way — but a write that keeps
-			// failing on a data path would otherwise never be visible, and
-			// this one deletes a binding the operator asked to be rid of.
-			err := db.WriteGenericSessionBinding(i.ID, "", "", "", "", time.Time{})
+		// The flag above means a later save re-applies this clear, so the
+		// outcome is eventually right either way — but a write that keeps
+		// failing on a data path would otherwise never be visible, and
+		// this one deletes a binding the operator asked to be rid of.
+		if err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+			return db.WriteGenericSessionBinding(i.ID, "", "", "", "", time.Time{})
+		}); !errors.Is(err, errNoStateDB) {
 			i.setGenericSessionPersistError(err)
 			if err != nil {
 				sessionLog.Warn("generic_session_clear_persist_failed",
@@ -8825,6 +8855,13 @@ func resolveClaudeTranscriptPath(configDir, projectPath, sessionID string) strin
 	if sessionID == "" {
 		return ""
 	}
+	// The ID becomes a file name and a glob pattern: a separator or ".." could
+	// name a file outside the projects tree and a glob metacharacter could
+	// match another session's transcript, so such an ID resolves to nothing.
+	fileName, err := conversationPathComponent(sessionID + ".jsonl")
+	if err != nil || strings.ContainsAny(sessionID, "*?[") {
+		return ""
+	}
 
 	// Resolve symlinks in project path (macOS: /tmp -> /private/tmp).
 	resolvedPath := projectPath
@@ -8852,7 +8889,11 @@ func resolveClaudeTranscriptPath(configDir, projectPath, sessionID string) strin
 		if candidateDir == "" {
 			continue
 		}
-		candidate := filepath.Join(projectsDir, ConvertToClaudeDirName(candidateDir), sessionID+".jsonl")
+		projectDir, ok := claudeProjectDir(configDir, ConvertToClaudeDirName(candidateDir))
+		if !ok {
+			continue
+		}
+		candidate := filepath.Join(projectDir, fileName)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -9880,7 +9921,7 @@ func (i *Instance) Restart() error {
 func (i *Instance) RestartWithEnv(env map[string]string) error {
 	for key := range env {
 		if !IsValidEnvKey(key) {
-			return fmt.Errorf("invalid environment variable name %q", key)
+			return fmt.Errorf("invalid environment variable name (%s, %d bytes)", EnvKeyRejectReason(key), len(key))
 		}
 	}
 	return i.restartRecorded(env)
@@ -10035,7 +10076,7 @@ func (i *Instance) restart(env map[string]string) error {
 			i.SandboxContainer = containerName
 		}
 		ownershipCommand = resumeCmd
-		mcpLog.Debug("respawn_pane_claude", slog.String("command", resumeCmd))
+		mcpLog.Debug("respawn_pane_claude", slog.String("command", logging.RedactCommandEnv(resumeCmd)))
 
 		// #1822 F2: assert AGENTDECK_PROFILE / CLAUDE_CONFIG_DIR host-side
 		// BEFORE respawn-pane, not after. tmux applies the session environment
@@ -10092,7 +10133,7 @@ func (i *Instance) restart(env map[string]string) error {
 			i.SandboxContainer = containerName
 		}
 		ownershipCommand = resumeCmd
-		sessionLog.Info("restart_gemini_respawn", slog.String("command", resumeCmd))
+		sessionLog.Info("restart_gemini_respawn", slog.String("command", logging.RedactCommandEnv(resumeCmd)))
 
 		// #1822 F2: gemini's rebuilt resume command carries no inline
 		// AGENTDECK_PROFILE prefix, and this branch returns before the
@@ -10152,7 +10193,7 @@ func (i *Instance) restart(env map[string]string) error {
 			i.SandboxContainer = containerName
 		}
 		ownershipCommand = resumeCmd
-		sessionLog.Info("restart_opencode_respawn", slog.String("command", resumeCmd))
+		sessionLog.Info("restart_opencode_respawn", slog.String("command", logging.RedactCommandEnv(resumeCmd)))
 
 		// #1822 F2: opencode's rebuilt resume command carries no inline
 		// AGENTDECK_PROFILE prefix, and this branch returns before the
@@ -10227,7 +10268,7 @@ func (i *Instance) restart(env map[string]string) error {
 			i.SandboxContainer = containerName
 		}
 		ownershipCommand = resumeCmd
-		sessionLog.Info("restart_codex_respawn", slog.String("command", resumeCmd))
+		sessionLog.Info("restart_codex_respawn", slog.String("command", logging.RedactCommandEnv(resumeCmd)))
 
 		// #1822 F2: belt-and-suspenders to the inline prefix buildCodexCommand
 		// already injects; this branch returns before the fallback recreate
@@ -10271,7 +10312,7 @@ func (i *Instance) restart(env map[string]string) error {
 			i.SandboxContainer = containerName
 		}
 		ownershipCommand = resumeCmd
-		sessionLog.Info("restart_cursor_respawn", slog.String("command", resumeCmd))
+		sessionLog.Info("restart_cursor_respawn", slog.String("command", logging.RedactCommandEnv(resumeCmd)))
 
 		// #1822 F2: must run BEFORE RespawnPane — see the Claude branch above
 		// for why (tmux applies session env at process start, not after).
@@ -10488,7 +10529,7 @@ func (i *Instance) restart(env map[string]string) error {
 	// call to Start(); config edits land on the next restart this way.
 	ApplyConfiguredLoadout(i)
 
-	mcpLog.Debug("restart_starting_new_session", slog.String("command", command))
+	mcpLog.Debug("restart_starting_new_session", slog.String("command", logging.RedactCommandEnv(command)))
 
 	if err := i.tmuxSession.Start(command); err != nil {
 		mcpLog.Debug("restart_start_failed", slog.String("error", err.Error()))
@@ -10686,7 +10727,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 			slog.String("path", logging.SanitizeValue(i.ProjectPath)),
 			slog.String("reason", "identity_guard_fresh_session"))
 		return fmt.Sprintf("%s%s%s --session-id %s%s",
-			envPrefix, bashExportPrefix, claudeCmd, fresh, extraFlags)
+			envPrefix, bashExportPrefix, claudeCmd, shellescape.Quote(fresh), extraFlags)
 	}
 
 	// #1815 / CodeQL go/log-injection: i.ClaudeSessionID, i.ID and
@@ -10746,7 +10787,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 	// (which silently fails inside Docker sandbox containers).
 	if useResume {
 		return fmt.Sprintf("%s%sexec %s --resume %s%s",
-			envPrefix, bashExportPrefix, claudeCmd, i.ClaudeSessionID, extraFlags)
+			envPrefix, bashExportPrefix, claudeCmd, shellescape.Quote(i.ClaudeSessionID), extraFlags)
 	}
 	// Session was never interacted with - use --session-id to create fresh session.
 	// Unless it HAS been: this branch is reached whenever the transcript is not
@@ -10756,7 +10797,7 @@ func (i *Instance) buildClaudeResumeCommand() string {
 	// it, so claudeStartIDForFlag mints a fresh one when the id is really in use.
 	startID := i.claudeStartIDForFlag(i.ClaudeSessionID)
 	return fmt.Sprintf("%s%sexec %s --session-id %s%s",
-		envPrefix, bashExportPrefix, claudeCmd, startID, extraFlags)
+		envPrefix, bashExportPrefix, claudeCmd, shellescape.Quote(startID), extraFlags)
 }
 
 // SetGeminiModel sets the Gemini model for this session and triggers a restart if running.
@@ -11188,10 +11229,10 @@ func (i *Instance) buildClaudeForkCommandForTarget(target *Instance, opts *Claud
 	// #1815: minted for the fork target — vouched ownership.
 	target.markClaudeSessionIDVerified()
 	cmd := fmt.Sprintf(
-		`cd '%s' && `+
+		`cd %s && `+
 			`%sexec claude --session-id "%s" --resume %s --fork-session%s`,
-		workDir,
-		bashExportPrefix, forkUUID, i.ClaudeSessionID, extraFlags)
+		shellQuote(workDir),
+		bashExportPrefix, forkUUID, shellescape.Quote(i.ClaudeSessionID), extraFlags)
 	cmd, err := i.applyWrapper(cmd)
 	if err != nil {
 		return "", err
@@ -12093,7 +12134,11 @@ func sessionConversationByteSize(inst *Instance, sessionID string) int64 {
 	if encodedPath == "" {
 		encodedPath = "-"
 	}
-	sessionFile := filepath.Join(configDir, "projects", encodedPath, sessionID+".jsonl")
+	fileName, err := conversationPathComponent(sessionID + ".jsonl")
+	if err != nil {
+		return 0
+	}
+	sessionFile := filepath.Join(configDir, "projects", encodedPath, fileName)
 	if info, err := os.Stat(sessionFile); err == nil {
 		return info.Size()
 	}
@@ -12138,7 +12183,11 @@ func sessionConversationMtime(inst *Instance, sessionID string) time.Time {
 	if encodedPath == "" {
 		encodedPath = "-"
 	}
-	sessionFile := filepath.Join(configDir, "projects", encodedPath, sessionID+".jsonl")
+	fileName, err := conversationPathComponent(sessionID + ".jsonl")
+	if err != nil {
+		return time.Time{}
+	}
+	sessionFile := filepath.Join(configDir, "projects", encodedPath, fileName)
 	if info, err := os.Stat(sessionFile); err == nil {
 		return info.ModTime()
 	}
@@ -12199,15 +12248,18 @@ func (i *Instance) bindClaudeSessionFromHook(sessionID, hookSource, hookEvent, a
 	// synchronously here, not because clobbering is impossible — a
 	// later peer reload that observes the new ID will short-circuit at
 	// the `sessionID == i.ClaudeSessionID` check in UpdateHookStatus.
-	if db := statedb.GetGlobal(); db != nil {
-		if err := db.WriteClaudeSessionBinding(i.ID, sessionID, i.ClaudeDetectedAt); err != nil {
-			sessionLog.Warn("claude_session_rebind_persist_failed",
-				slog.String("instance_id", i.ID),
-				slog.String("new_id", sessionID),
-				slog.String("error", err.Error()))
-		} else {
-			i.linkedClaudeSessionID = sessionID
-		}
+	err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+		return db.WriteClaudeSessionBinding(i.ID, sessionID, i.ClaudeDetectedAt)
+	})
+	switch {
+	case errors.Is(err, errNoStateDB):
+	case err != nil:
+		sessionLog.Warn("claude_session_rebind_persist_failed",
+			slog.String("instance_id", i.ID),
+			slog.String("new_id", sessionID),
+			slog.String("error", err.Error()))
+	default:
+		i.linkedClaudeSessionID = sessionID
 	}
 }
 
@@ -12222,11 +12274,11 @@ func (i *Instance) confirmClaudeSessionLink(sessionID, hookSource string) {
 	if sessionID == "" || i.linkedClaudeSessionID == sessionID {
 		return
 	}
-	db := statedb.GetGlobal()
-	if db == nil {
+	if err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+		return db.UpsertSessionLink(i.ID, "claude", sessionID, "", true)
+	}); errors.Is(err, errNoStateDB) {
 		return
-	}
-	if err := db.UpsertSessionLink(i.ID, "claude", sessionID, "", true); err != nil {
+	} else if err != nil {
 		sessionLog.Warn("claude_session_link_confirm_failed",
 			slog.String("instance_id", i.ID),
 			slog.String("session_id", sessionID),
@@ -12245,11 +12297,13 @@ func (i *Instance) confirmClaudeSessionLink(sessionID, hookSource string) {
 // WriteClaudeSessionBinding and by confirmClaudeSessionLink; this is the
 // matching retraction.
 func (i *Instance) retractClaudeCandidateLink(candidate string) {
-	db := statedb.GetGlobal()
-	if db == nil || candidate == "" {
+	if candidate == "" {
 		return
 	}
-	if _, err := db.RetractSessionLink(i.ID, "claude", candidate); err != nil {
+	if err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+		_, err := db.RetractSessionLink(i.ID, "claude", candidate)
+		return err
+	}); err != nil && !errors.Is(err, errNoStateDB) {
 		sessionLog.Warn("claude_session_link_retract_failed",
 			slog.String("instance_id", i.ID),
 			slog.String("candidate", candidate),
@@ -12325,7 +12379,11 @@ func sessionHasConversationData(inst *Instance, sessionID string) bool {
 		encodedPath = "-"
 	}
 
-	sessionFile := filepath.Join(configDir, "projects", encodedPath, sessionID+".jsonl")
+	fileName, err := conversationPathComponent(sessionID + ".jsonl")
+	if err != nil {
+		return false
+	}
+	sessionFile := filepath.Join(configDir, "projects", encodedPath, fileName)
 
 	// Issue #662 diagnostic contract: emit a single structured "decision"
 	// log line per call with every field needed to reconstruct the false
@@ -12626,9 +12684,9 @@ func (i *Instance) wrapForSSH(command string) string {
 		return command
 	}
 
-	// Ensure ControlMaster socket directory exists
-	sshDir := "/tmp/agent-deck-ssh"
-	_ = os.MkdirAll(sshDir, 0700)
+	// Ensure the per-user ControlMaster socket directory exists and is private
+	// (internal/sshcontrol, upstream #2885).
+	controlPath := sshcontrol.ControlPath()
 
 	// remoteCmd is the shell program the REMOTE shell will run. It is quoted
 	// exactly once, by shellQuote below, when it becomes ssh's final argument.
@@ -12650,7 +12708,8 @@ func (i *Instance) wrapForSSH(command string) string {
 	remoteCmd := RemoteCDPrefix(i.SSHRemotePath) + command
 
 	return fmt.Sprintf(
-		"ssh -t -o ControlMaster=auto -o ControlPath=/tmp/agent-deck-ssh/%%r@%%h:%%p -o ControlPersist=600 %s %s",
+		"ssh -t -o ControlMaster=auto -o ControlPath=%s -o ControlPersist=600 %s %s",
+		shellQuote(controlPath),
 		shellQuote(i.SSHHost),
 		shellQuote(remoteCmd),
 	)

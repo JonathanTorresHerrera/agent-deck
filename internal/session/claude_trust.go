@@ -51,6 +51,12 @@ func PreAcceptClaudeTrust(claudeJSONPath, parentDir string) error {
 	if entry == nil {
 		entry = map[string]any{}
 	}
+	// Log the first grant for this folder (upstream #2876): a trust grant is
+	// an audit event, not a silent side effect of a launch.
+	granted := false
+	if accepted, _ := entry["hasTrustDialogAccepted"].(bool); !accepted {
+		granted = true
+	}
 	entry["hasTrustDialogAccepted"] = true
 	projects[parentDir] = entry
 	cfg["projects"] = projects
@@ -65,6 +71,9 @@ func PreAcceptClaudeTrust(claudeJSONPath, parentDir string) error {
 	}
 	if err := atomicfile.WriteFile(claudeJSONPath, out, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", claudeJSONPath, err)
+	}
+	if granted {
+		logFolderTrustGranted("claude", parentDir, "config", claudeJSONPath)
 	}
 	return nil
 }

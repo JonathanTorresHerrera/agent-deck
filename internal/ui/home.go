@@ -10640,51 +10640,7 @@ func (h *Home) createSessionFromGlobalSearch(result *GlobalSearchResult) tea.Cmd
 		userConfig, _ := session.LoadUserConfig()
 		opts := session.NewClaudeOptions(userConfig)
 
-		// Build command - only set CLAUDE_CONFIG_DIR if explicitly configured
-		// If not explicit, let the tmux shell's environment handle it
-		// This is critical for WSL and other environments where users have
-		// CLAUDE_CONFIG_DIR set in their .bashrc/.zshrc
-		var cmdBuilder strings.Builder
-		if session.IsClaudeConfigDirExplicitForGroup(inst.GroupPath) {
-			configDir := session.GetClaudeConfigDirForGroup(inst.GroupPath)
-			// #1815 (Codex review on #1830): quote exactly as
-			// Instance.buildBashExportPrefix does (instance.go, audit F2) —
-			// this string is baked into inst.Command and ends up in a
-			// `bash -c` payload, so an unquoted config_dir containing
-			// whitespace, ;, or $(...) breaks the command or injects.
-			cmdBuilder.WriteString(fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", shellescape.Quote(configDir)))
-		}
-		// #1815: the TUI picker builds a resume command too, so it routes
-		// through the same resume-time identity guard as restart / start /
-		// fork. The id was just recorded onto inst above (the user picked
-		// this conversation FOR this session), so the check passes by
-		// construction today — it is here so a future change that reuses an
-		// existing instance here cannot resume a conversation that instance
-		// does not own. Only the identity half applies: the user's explicit
-		// pick must not be downgraded to a fresh session by the
-		// conversation-data heuristics.
-		//
-		// exec so the agent replaces the wrapper shell and leads the pane,
-		// matching buildClaudeResumeCommand and the fresh-start path
-		if allowed, _ := session.ResumeIdentityAllowed(inst, result.SessionID); allowed {
-			cmdBuilder.WriteString("exec claude --resume ")
-			cmdBuilder.WriteString(result.SessionID)
-		} else {
-			freshID := session.NewClaudeSessionUUID()
-			inst.ClaudeSessionID = freshID
-			// #1815: a freshly minted id is vouched ownership, same as every
-			// other minted-id writer (Instance.replaceRefusedClaudeSessionID,
-			// buildClaudeCommandWithMessage's own mint path).
-			session.MarkClaudeSessionIDVerified(inst)
-			cmdBuilder.WriteString("exec claude --session-id ")
-			cmdBuilder.WriteString(freshID)
-		}
-		if opts.SkipPermissions {
-			cmdBuilder.WriteString(" --dangerously-skip-permissions")
-		} else if opts.AllowSkipPermissions {
-			cmdBuilder.WriteString(" --allow-dangerously-skip-permissions")
-		}
-		inst.Command = cmdBuilder.String()
+		inst.Command = globalSearchClaudeCommand(inst, result.SessionID, opts)
 
 		// Persist options so restarts use per-session settings
 		_ = inst.SetClaudeOptions(opts)
@@ -11507,6 +11463,58 @@ func (h *Home) syncPointerShape() {
 	default:
 		h.sessionOutput.SetPointerShape(pointerShapeDefault)
 	}
+}
+
+// globalSearchClaudeCommand builds the claude resume command for a global
+// search hit. sessionID comes from an indexed transcript's "sessionId" field
+// (recall NativeID), i.e. file data, so it is shell-quoted like every other
+// claude resume id; ordinary UUIDs are left byte-identical.
+func globalSearchClaudeCommand(inst *session.Instance, sessionID string, opts *session.ClaudeOptions) string {
+	// Build command - only set CLAUDE_CONFIG_DIR if explicitly configured
+	// If not explicit, let the tmux shell's environment handle it
+	// This is critical for WSL and other environments where users have
+	// CLAUDE_CONFIG_DIR set in their .bashrc/.zshrc
+	var cmdBuilder strings.Builder
+	if session.IsClaudeConfigDirExplicitForGroup(inst.GroupPath) {
+		configDir := session.GetClaudeConfigDirForGroup(inst.GroupPath)
+		// #1815 (Codex review on #1830): quote exactly as
+		// Instance.buildBashExportPrefix does (instance.go, audit F2) —
+		// this string is baked into inst.Command and ends up in a
+		// `bash -c` payload, so an unquoted config_dir containing
+		// whitespace, ;, or $(...) breaks the command or injects.
+		cmdBuilder.WriteString(fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", shellescape.Quote(configDir)))
+	}
+	// #1815: the TUI picker builds a resume command too, so it routes
+	// through the same resume-time identity guard as restart / start /
+	// fork. The id was just recorded onto inst above (the user picked
+	// this conversation FOR this session), so the check passes by
+	// construction today — it is here so a future change that reuses an
+	// existing instance here cannot resume a conversation that instance
+	// does not own. Only the identity half applies: the user's explicit
+	// pick must not be downgraded to a fresh session by the
+	// conversation-data heuristics.
+	//
+	// exec so the agent replaces the wrapper shell and leads the pane,
+	// matching buildClaudeResumeCommand and the fresh-start path
+	if allowed, _ := session.ResumeIdentityAllowed(inst, sessionID); allowed {
+		cmdBuilder.WriteString("exec claude --resume ")
+		cmdBuilder.WriteString(shellescape.Quote(sessionID))
+	} else {
+		freshID := session.NewClaudeSessionUUID()
+		inst.ClaudeSessionID = freshID
+		// #1815: a freshly minted id is vouched ownership, same as every
+		// other minted-id writer (Instance.replaceRefusedClaudeSessionID,
+		// buildClaudeCommandWithMessage's own mint path).
+		session.MarkClaudeSessionIDVerified(inst)
+		cmdBuilder.WriteString("exec claude --session-id ")
+		cmdBuilder.WriteString(freshID)
+	}
+	if opts.SkipPermissions {
+		cmdBuilder.WriteString(" --dangerously-skip-permissions")
+	} else if opts.AllowSkipPermissions {
+		cmdBuilder.WriteString(" --allow-dangerously-skip-permissions")
+	}
+	return cmdBuilder.String()
 }
 
 // handleMouse handles mouse events (click to select, double-click to activate)
@@ -12561,6 +12569,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Exec an interactive shell inside the sandbox container.
 		if selected := h.getSelectedSession(); selected != nil && selected.IsSandboxed() &&
 			selected.SandboxContainer != "" {
+			// OpenContainerShell runs docker/tmux setup first; keys typed meanwhile belong to the shell (see holdInputForExec).
+			defer holdInputForExec()()
 			tmuxName, shellErr := selected.OpenContainerShell()
 			if shellErr != nil {
 				h.setError(shellErr)
@@ -12568,7 +12578,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			termSession := &tmux.Session{Name: tmuxName}
 			h.isAttaching.Store(true)
-			return h, tea.Exec(attachCmd{
+			return h, execHoldingInput(attachCmd{
 				session: termSession,
 				opts:    tmux.AttachOptions{DetachByte: h.detachByte()},
 				onExit:  func() { h.isAttaching.Store(false) },
@@ -13397,6 +13407,8 @@ func (h *Home) changeStatusFilter(filter session.Status) tea.Cmd {
 }
 
 func (h *Home) attachSelectedLegacy() tea.Cmd {
+	// Keys typed while the checks below run belong to the pane (see holdInputForExec).
+	defer holdInputForExec()()
 	if h.cursor < 0 || h.cursor >= len(h.flatItems) {
 		return nil
 	}
@@ -13440,7 +13452,7 @@ func (h *Home) attachSelectedLegacy() tea.Cmd {
 			}
 		}
 		h.isAttaching.Store(true)
-		return tea.Exec(attachWindowCmd{
+		return execHoldingInput(attachWindowCmd{
 			session:     tmuxSess,
 			windowIndex: item.WindowIndex,
 			detachByte:  h.detachByte(),
@@ -15766,9 +15778,12 @@ func (h *Home) createSessionInGroupWithWorktreeAndOptions(
 
 				// Resolved for inst.ProjectPath (the primary repo, per #2093)
 				// so directory-local .agent-deck/config.toml overrides apply.
-				wtSettings, wtSettingsErr := session.GetWorktreeSettingsForDir(inst.ProjectPath)
+				wtSettings, dirLocalNotice, wtSettingsErr := session.GetWorktreeSettingsForDirWithNotice(inst.ProjectPath)
 				if wtSettingsErr != nil {
 					return sessionCreatedMsg{err: fmt.Errorf("invalid directory-local config: %w", wtSettingsErr), tempID: tempID}
+				}
+				if dirLocalNotice != "" {
+					setupWarning = formatSetupWarning(&dirLocalNoticeError{notice: dirLocalNotice})
 				}
 				wtResult := session.CreateMultiRepoWorktreesWithOptions(allPaths, parentDir, worktreeBranch, wtSettings)
 				for _, w := range wtResult.Warnings {
@@ -15873,7 +15888,7 @@ func createWorktreeWithSetupAndLog(backend vcs.Backend, wtPath, branch, sourceDi
 	var buf bytes.Buffer
 	// Resolved for sourceDir (the session's target directory, per #2093) so
 	// directory-local .agent-deck/config.toml overrides apply.
-	wtSettings, settingsErr := session.GetWorktreeSettingsForDir(sourceDir)
+	wtSettings, dirLocalNotice, settingsErr := session.GetWorktreeSettingsForDirWithNotice(sourceDir)
 	if settingsErr != nil {
 		return nil, fmt.Errorf("invalid directory-local config: %w", settingsErr)
 	}
@@ -15886,7 +15901,35 @@ func createWorktreeWithSetupAndLog(backend vcs.Backend, wtPath, branch, sourceDi
 	if setupErr != nil {
 		uiLog.Warn("worktree_setup_script_failed", slog.String("error", setupErr.Error()), slog.String("output", buf.String()))
 	}
-	return setupErr, nil
+	// A skipped untrusted dir-local config changes which settings applied;
+	// the footer is the only place the TUI user sees that (upstream #2885).
+	return withDirLocalNotice(setupErr, dirLocalNotice), nil
+}
+
+// dirLocalNoticeError carries the notice that a directory-local config was
+// skipped as untrusted, alongside the setup-script failure (if any), to the
+// footer warning. Unwrap keeps errors.Is/As working on the setup error.
+type dirLocalNoticeError struct {
+	notice string
+	setup  error
+}
+
+func (e *dirLocalNoticeError) Error() string {
+	if e.setup == nil {
+		return e.notice
+	}
+	return e.setup.Error() + "; " + e.notice
+}
+
+func (e *dirLocalNoticeError) Unwrap() error { return e.setup }
+
+// withDirLocalNotice attaches a skipped-dir-local-config notice to the
+// setup result for the footer; with no notice it returns setupErr as is.
+func withDirLocalNotice(setupErr error, notice string) error {
+	if notice == "" {
+		return setupErr
+	}
+	return &dirLocalNoticeError{notice: notice, setup: setupErr}
 }
 
 // setupWarningMaxLen bounds the setup-script failure text shown in the footer,
@@ -15897,6 +15940,19 @@ const setupWarningMaxLen = 300
 // sanitized footer line: ANSI stripped, whitespace collapsed, capped. The
 // verbose output stays in the log (see createWorktreeWithSetupAndLog).
 func formatSetupWarning(setupErr error) string {
+	// A skipped untrusted dir-local config rides along with (or instead of)
+	// the setup-script failure.
+	var notice *dirLocalNoticeError
+	if errors.As(setupErr, &notice) {
+		msg := strings.Join(strings.Fields(tmux.StripANSI(notice.notice)), " ")
+		if runes := []rune(msg); len(runes) > setupWarningMaxLen {
+			msg = string(runes[:setupWarningMaxLen]) + "…"
+		}
+		if notice.setup == nil {
+			return msg
+		}
+		return formatSetupWarning(notice.setup) + " · " + msg
+	}
 	msg := strings.Join(strings.Fields(tmux.StripANSI(setupErr.Error())), " ")
 	// Truncate by rune, not byte, so a multi-byte character is never split.
 	if runes := []rune(msg); len(runes) > setupWarningMaxLen {
@@ -16471,6 +16527,9 @@ type forkWithStateWorktreeDeps struct {
 	runSetup                  func(string, string, io.Writer, io.Writer, time.Duration) error
 	removeWorktree            func(string, string, bool) error
 	deleteBranch              func(string, string, bool) error
+	// dirLocalNotice names a directory-local config skipped as untrusted
+	// while resolving these settings; it is returned with the setup result.
+	dirLocalNotice string
 }
 
 // sparseSourceDir is the parent session's worktree: with
@@ -16487,16 +16546,19 @@ func defaultForkWithStateWorktreeDeps(sparseSourceDir string) forkWithStateWorkt
 	// inherit from, so SparseInheritOptions yields the same zero options
 	// either way and the lookup is skipped.
 	wtSettings := session.GetWorktreeSettings()
+	var dirLocalNotice string
 	if sparseSourceDir != "" {
-		if local, err := session.GetWorktreeSettingsForDir(sparseSourceDir); err != nil {
+		if local, notice, err := session.GetWorktreeSettingsForDirWithNotice(sparseSourceDir); err != nil {
 			uiLog.Warn("dir_local_config_invalid", slog.String("dir", sparseSourceDir), slog.String("error", err.Error()))
 			wtSettings.SparseCheckout = ""
 		} else {
 			wtSettings = local
+			dirLocalNotice = notice
 		}
 	}
 	createOpts := wtSettings.CreateOptions(sparseSourceDir)
 	return forkWithStateWorktreeDeps{
+		dirLocalNotice:            dirLocalNotice,
 		statPath:                  os.Stat,
 		mkdirAll:                  os.MkdirAll,
 		validateDestination:       git.ValidateForkWithStateDestination,
@@ -16831,6 +16893,11 @@ func (h *Home) forkSessionCmdWithOptions(
 					); err != nil {
 						return sessionForkedMsg{err: err, sourceID: sourceID}
 					}
+					// The jj path has no setup result to carry it, so report a
+					// skipped untrusted dir-local config here.
+					if _, notice, err := session.GetWorktreeSettingsForDirWithNotice(source.ProjectPath); err == nil && notice != "" {
+						setupWarning = formatSetupWarning(&dirLocalNoticeError{notice: notice})
+					}
 					// gitignored files are copied via git's exclude machinery; a jj
 					// repo with no git worktree root (pure jj, or a linked workspace)
 					// can't enumerate them, so tell the user instead of dropping them
@@ -16997,9 +17064,9 @@ func forkWithStateWorktree(parentPath, repoRoot, worktreePath, branch string, st
 		// the whole fork. The full output is logged; the concise error is
 		// returned so the caller can surface it in the UI.
 		uiLog.Warn("fork_with_state_setup_failed", slog.String("path", worktreePath), slog.String("err", scriptErr.Error()), slog.String("output", setupBuf.String()))
-		return scriptErr, nil
+		return withDirLocalNotice(scriptErr, deps.dirLocalNotice), nil
 	}
-	return nil, nil
+	return withDirLocalNotice(nil, deps.dirLocalNotice), nil
 }
 
 // forkWithStateWorkspaceJJ is the jujutsu equivalent of forkWithStateWorktree:
@@ -17943,6 +18010,8 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	if tmuxSess == nil {
 		return nil
 	}
+	// Keys typed while the setup below runs belong to the pane (see holdInputForExec).
+	defer holdInputForExec()()
 
 	// Patch 13: stamp the last-prompt wall clock into status-right before
 	// the bar is built, so the answer to "when did I last work on this" is on
@@ -18027,7 +18096,7 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	// which would lose the tmux session state)
 	h.isAttaching.Store(true) // Prevent View() output only during actual attach transition
 	res := &attachResult{}
-	return tea.Exec(attachCmd{
+	return execHoldingInput(attachCmd{
 		session: tmuxSess,
 		opts:    h.attachOptions(tmuxSess),
 		result:  res,
@@ -18277,6 +18346,7 @@ func (r remoteCreateAndAttachCmd) SetStderr(writer io.Writer) {}
 // new-session dialog's choices (#1353), then auto-attaches to it. Zero values
 // fall back to remote defaults (shell, auto-generated name, remote CWD).
 func (h *Home) createRemoteSessionWithOptions(remoteName string, opts session.RemoteAddOptions) tea.Cmd {
+	defer holdInputForExec()() // keys typed meanwhile belong to the remote pane
 	config, err := session.LoadUserConfig()
 	if err != nil || config == nil || config.Remotes == nil {
 		return func() tea.Msg {
@@ -18292,7 +18362,7 @@ func (h *Home) createRemoteSessionWithOptions(remoteName string, opts session.Re
 	runner := session.NewSSHRunner(remoteName, rc)
 	h.isAttaching.Store(true)
 	var createdID string
-	return tea.Exec(remoteCreateAndAttachCmd{
+	return execHoldingInput(remoteCreateAndAttachCmd{
 		runner: runner, opts: opts, createCtx: h.ctx, created: &createdID,
 		// Clear the flag inside Run(), before Bubble Tea restores the terminal
 		// and resumes the loop (#1753); the callback below is only the belt for
@@ -18619,6 +18689,7 @@ func swapRemoteGroupSibling(paths []string, groupPath string, delta int) []strin
 
 // attachRemoteSession attaches to a remote session via SSH, suspending the TUI.
 func (h *Home) attachRemoteSession(remoteName, sessionID string) tea.Cmd {
+	defer holdInputForExec()() // keys typed meanwhile belong to the remote pane
 	runner, err := remoteRunnerFor(remoteName)
 	if err != nil {
 		// Say so instead of a silent no-op on Enter.
@@ -18627,7 +18698,7 @@ func (h *Home) attachRemoteSession(remoteName, sessionID string) tea.Cmd {
 		}
 	}
 	h.isAttaching.Store(true)
-	return tea.Exec(remoteAttachCmd{
+	return execHoldingInput(remoteAttachCmd{
 		runner:    runner,
 		sessionID: sessionID,
 		// Clear the flag inside Run() (#1753) — see attachCmd.onExit. The

@@ -196,7 +196,17 @@ func (s *Session) themedStatusRight(themeStyle tmuxThemeStyle) string {
 		stamp = fmt.Sprintf("│ #[fg=%s]prompt %s#[default] ", themeStyle.hintColor, v)
 	}
 
-	return fmt.Sprintf("%s %s│ 📁 %s | %s ", hints, stamp, s.DisplayName, s.projectDisplayName())
+	return fmt.Sprintf("%s %s│ 📁 %s | %s ", hints, stamp, FormatLiteral(s.DisplayName), FormatLiteral(s.projectDisplayName()))
+}
+
+// FormatLiteral escapes text placed into a tmux format string such as
+// status-right, status-left or a display-message. tmux expands "#(cmd)" there by running cmd through the shell
+// on every status refresh, and "#[...]" as style codes; "##" is a literal "#".
+// The session title and the project folder name are not ours to trust (a
+// title can come from an OpenClaw gateway or a web request, a folder from a
+// cloned repository), so every "#" in them is doubled.
+func FormatLiteral(s string) string {
+	return strings.ReplaceAll(s, "#", "##")
 }
 
 func (s *Session) projectDisplayName() string {
@@ -368,6 +378,12 @@ func RefreshSessionCache() {
 	defer cancel()
 	cmd := tmuxExecContext(ctx, DefaultSocketName(), "list-windows", "-a", "-F", tmuxFmt("#{session_name}", "#{window_activity}", "#{window_index}", "#{window_id}", "#{window_name}"))
 	output, err := commandOutput(cmd)
+	// "no server running" is an authoritative empty listing, not a failed
+	// one. Caching it as invalid sent every session's status check to its
+	// own has-session fork each pass (~37 forks/s with 492 dead rows).
+	if err != nil && ctx.Err() == nil && isEmptyTmuxServerResult(err) {
+		output, err = nil, nil
+	}
 	if err != nil {
 		sessionCacheMu.Lock()
 		sessionCacheData = nil
@@ -1275,7 +1291,12 @@ type Session struct {
 	cacheMu      sync.RWMutex
 	cacheContent string
 	cacheTime    time.Time
-	captureSf    singleflight.Group // Deduplicates concurrent CapturePane subprocess calls
+	// cachePrimedUntil extends cacheContent past the 500ms window when it
+	// came from a batched capture (PrimePaneCaptures): one status pass reads
+	// every row's frame from that single tmux call even when the pass itself
+	// runs longer than 500ms on a loaded host.
+	cachePrimedUntil time.Time
+	captureSf        singleflight.Group // Deduplicates concurrent CapturePane subprocess calls
 
 	// Content tracking for HasUpdated (separate from StateTracker)
 	lastHash    string
@@ -1776,6 +1797,7 @@ func (s *Session) invalidateCache() {
 	defer s.cacheMu.Unlock()
 	s.cacheContent = ""
 	s.cacheTime = time.Time{}
+	s.cachePrimedUntil = time.Time{}
 }
 
 // ensureStateTrackerLocked lazily allocates the tracker so callers can safely
@@ -3355,6 +3377,25 @@ func (s *Session) Exists() bool {
 	return err == nil
 }
 
+// AbsentFromCache reports, without spawning a subprocess, that the current
+// session listing positively shows this session missing from the default
+// server and no PipeManager connection holds it. Exists() does not trust that
+// negative because it can transiently miss a LIVE session; a caller may only
+// use it to keep an already-dead session dead, where a miss just delays
+// noticing a revival until the next refresh.
+func (s *Session) AbsentFromCache() bool {
+	if strings.TrimSpace(s.SocketName) != DefaultSocketName() {
+		return false
+	}
+	if exists, cacheValid := sessionExistsFromCache(s.Name); !cacheValid || exists {
+		return false
+	}
+	if pm := GetPipeManager(); pm != nil && pm.IsConnected(s.Name) {
+		return false
+	}
+	return true
+}
+
 // ExistsCached is a cheap, non-blocking liveness check for hot periodic loops
 // that iterate over ALL sessions every tick (e.g. the background configure loop
 // and theme propagation). It NEVER spawns a subprocess on the calling
@@ -3432,6 +3473,11 @@ func (s *Session) IsPaneDead() bool {
 // pair to distinguish a clean exit (0) from a crash (non-zero) instead of
 // treating every terminated pane as an error.
 func (s *Session) PaneDeadExitStatus() (int, bool) {
+	// A session the listing shows absent has no pane to report on; skip the
+	// fork that would only fail.
+	if s.AbsentFromCache() {
+		return 0, false
+	}
 	// Bounded like IsPaneDead: this runs on the notify-daemon poll loop, so a
 	// wedged tmux server must not stall it.
 	ctx, cancel := context.WithTimeout(context.Background(), hasSessionProbeTimeout)
@@ -4082,7 +4128,9 @@ func (s *Session) RespawnPane(command string) error {
 	// for a different process generation.
 	s.mu.Lock()
 
-	mcpLog.Debug("respawn_pane_executing", slog.Any("args", args))
+	// LOC-4: the respawn command carries the session's env prelude; log the
+	// variable names only, never their values.
+	mcpLog.Debug("respawn_pane_executing", slog.Any("args", logging.RedactCommandEnvArgs(args)))
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxMutationTimeout)
 	cmd := s.tmuxCmdContext(ctx, args...)
 	output, err := commandCombinedOutput(cmd)
@@ -4193,7 +4241,7 @@ func (s *Session) GetCachedWindowActivity() int64 {
 func (s *Session) CapturePane() (string, error) {
 	// Fast path: return cached content if fresh
 	s.cacheMu.RLock()
-	if s.cacheContent != "" && time.Since(s.cacheTime) < 500*time.Millisecond {
+	if s.captureCacheFreshLocked(time.Now()) {
 		content := s.cacheContent
 		s.cacheMu.RUnlock()
 		logging.Aggregate(logging.CompPerf, "capture_pane_cache_hit", slog.String("session", s.Name))
@@ -4205,7 +4253,7 @@ func (s *Session) CapturePane() (string, error) {
 	v, err, _ := s.captureSf.Do("capture", func() (interface{}, error) {
 		// Double-check cache inside singleflight
 		s.cacheMu.RLock()
-		if s.cacheContent != "" && time.Since(s.cacheTime) < 500*time.Millisecond {
+		if s.captureCacheFreshLocked(time.Now()) {
 			content := s.cacheContent
 			s.cacheMu.RUnlock()
 			return content, nil
@@ -7317,11 +7365,12 @@ func globalEnvironmentValue(socket, key string) (string, error) {
 
 // SetStatusLeft sets the left side of tmux status bar for a session.
 // Used by NotificationManager to display waiting session notifications.
+//
+// text is a tmux format string: callers escape untrusted parts with
+// FormatLiteral. It is passed as one argv element, so no shell quoting.
 func SetStatusLeft(sessionName, text string) error {
-	// Escape single quotes for tmux by replacing ' with '\''
-	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	// Bounded — see tmuxMutationTimeout. Driven by the notification sweep.
-	return runBoundedMutation(DefaultSocketName(), "set-option", "-t", sessionName, "status-left", escaped)
+	return runBoundedMutation(DefaultSocketName(), "set-option", "-t", sessionName, "status-left", text)
 }
 
 // ClearStatusLeft resets status-left to default for a session.
@@ -7341,14 +7390,56 @@ var savedStatusLeft struct {
 	captured bool
 }
 
+// statusLeftOriginalOption is a tmux user option holding the user's own global
+// status-left. It lives on the tmux server, so it outlives the TUI process: a
+// TUI that exits without ClearStatusLeftGlobal (crash, kill -9, auto-update
+// restart) leaves its notification bar as the global status-left, and the next
+// TUI must not mistake that bar for the user's theme value (#2705).
+const statusLeftOriginalOption = "@agentdeck_orig_status_left"
+
+// statusLeftOriginalMarker prefixes the stored value so an empty original
+// status-left is told apart from an unset option (show-option -q prints "").
+const statusLeftOriginalMarker = "v:"
+
+// notificationBarPrefix is the prefix every agent-deck notification bar
+// carries (session.FormatBar / formatBarMinimal).
+const notificationBarPrefix = "⚡ "
+
+// looksLikeNotificationBar reports whether a status-left value is an
+// agent-deck notification bar rather than a user or theme value.
+func looksLikeNotificationBar(value string) bool {
+	return strings.HasPrefix(value, notificationBarPrefix)
+}
+
 // captureOriginalStatusLeft reads and stores the current global status-left value.
 // Called once on first SetStatusLeftGlobal to preserve the user's existing value.
+// When the current value is a leftover notification bar from an earlier TUI,
+// the original saved on the tmux server is used instead; with none saved,
+// nothing is captured and ClearStatusLeftGlobal falls back to the tmux default.
 func captureOriginalStatusLeft() {
+	socket := DefaultSocketName()
 	// Bounded — see tmuxPollTimeout. A read, and the only chance to capture the
 	// user's theme value: if it hangs, SetStatusLeftGlobal never runs either.
-	out, err := runBoundedOutput(DefaultSocketName(), "show-option", "-gv", "status-left")
-	if err == nil {
-		savedStatusLeft.value = strings.TrimRight(string(out), "\n")
+	out, err := runBoundedOutput(socket, "show-option", "-gv", "status-left")
+	if err != nil {
+		return
+	}
+	current := strings.TrimRight(string(out), "\n")
+	if !looksLikeNotificationBar(current) {
+		savedStatusLeft.value = current
+		savedStatusLeft.captured = true
+		// Persist it for a later TUI that starts while a bar is showing.
+		_ = runBoundedMutation(socket, "set-option", "-g", statusLeftOriginalOption,
+			statusLeftOriginalMarker+current)
+		return
+	}
+	// A previous TUI's bar is still up: never treat it as the original.
+	stored, err := runBoundedOutput(socket, "show-option", "-gqv", statusLeftOriginalOption)
+	if err != nil {
+		return
+	}
+	if value, ok := strings.CutPrefix(strings.TrimRight(string(stored), "\n"), statusLeftOriginalMarker); ok {
+		savedStatusLeft.value = value
 		savedStatusLeft.captured = true
 	}
 }
@@ -7357,11 +7448,15 @@ func captureOriginalStatusLeft() {
 // This is a MAJOR performance optimization: ONE tmux call instead of 100+.
 // All agentdeck sessions inherit this global setting.
 // On first call, captures the existing status-left so ClearStatusLeftGlobal can restore it.
+//
+// text is a tmux format string (the bar uses #[fg=...] styles): callers
+// escape untrusted parts such as session titles with FormatLiteral. It is
+// passed as one argv element, so it needs no shell quoting (the former
+// shell-style quote rewrite made tmux show "it's" with backslashes in it).
 func SetStatusLeftGlobal(text string) error {
 	savedStatusLeft.Do(captureOriginalStatusLeft)
-	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	// Bounded — see tmuxMutationTimeout. Driven by the notification sweep.
-	return runBoundedMutation(DefaultSocketName(), "set-option", "-g", "status-left", escaped)
+	return runBoundedMutation(DefaultSocketName(), "set-option", "-g", "status-left", text)
 }
 
 // ClearStatusLeftGlobal restores the original global status-left value.
@@ -7371,9 +7466,9 @@ func SetStatusLeftGlobal(text string) error {
 func ClearStatusLeftGlobal() error {
 	socket := DefaultSocketName()
 	if savedStatusLeft.captured {
-		escaped := strings.ReplaceAll(savedStatusLeft.value, "'", "'\\''")
+		// Restored verbatim: it is the user's own format string.
 		// Bounded — see tmuxMutationTimeout.
-		return runBoundedMutation(socket, "set-option", "-g", "status-left", escaped)
+		return runBoundedMutation(socket, "set-option", "-g", "status-left", savedStatusLeft.value)
 	}
 	// No saved value — fall back to unset (original behavior)
 	return runBoundedMutation(socket, "set-option", "-gu", "status-left")

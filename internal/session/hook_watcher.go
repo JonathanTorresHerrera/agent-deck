@@ -250,7 +250,7 @@ func NewStatusFileWatcher(onChange func()) (*StatusFileWatcher, error) {
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(hooksDir, 0755); err != nil {
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		return nil, err
 	}
 

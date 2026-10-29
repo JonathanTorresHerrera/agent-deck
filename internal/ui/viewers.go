@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
@@ -23,14 +24,37 @@ import (
 // which would push the row's trailing badges off the pane.
 const viewersEye = "👁️"
 
-// viewersBadge is the row badge: " 👁️ 2" for two attached terminals, nothing
-// when nobody is attached or the count is unknown (a row has no room to say
-// why).
+// viewersBadge is the row badge: " 👁️ PC+iPad" when every attached terminal
+// is known by device (viewer_device.go in internal/tmux), " 👁️ 2" otherwise,
+// nothing when nobody is attached or the count is unknown (a row has no
+// room to say why).
 func viewersBadge(viewers []tmux.Viewer, known bool) string {
 	if !known || len(viewers) == 0 {
 		return ""
 	}
+	if labels := viewerDeviceLabels(viewers); labels != "" {
+		return " " + viewersEye + " " + labels
+	}
+	return viewersCountBadge(viewers)
+}
+
+// viewersCountBadge is the count form of the row badge: " 👁️ 2".
+func viewersCountBadge(viewers []tmux.Viewer) string {
 	return fmt.Sprintf(" %s %d", viewersEye, len(viewers))
+}
+
+// viewerDeviceLabels joins the viewers' device names with "+", most recently
+// active first ("PC+iPad"); "" unless every viewer has one, so a row never
+// mixes a device with a count.
+func viewerDeviceLabels(viewers []tmux.Viewer) string {
+	labels := make([]string, 0, len(viewers))
+	for _, v := range viewers {
+		if v.Device == "" {
+			return ""
+		}
+		labels = append(labels, v.Device)
+	}
+	return strings.Join(labels, "+")
 }
 
 // renderViewersBadge styles viewersBadge for a session row: cyan, or the
@@ -44,12 +68,15 @@ func renderViewersBadge(viewers []tmux.Viewer, known bool, selected bool) string
 // fitViewersBadge renders the row badge within budget cells (a negative
 // budget means unbounded) and returns it with its width. Like the account
 // badge, it takes part in the row's width budget (#2201): when the full
-// " 👁️ N" does not fit it shortens to the eye alone, then drops, so the
-// title never pays for it.
+// " 👁️ PC+iPad" does not fit it shortens to the count " 👁️ N", then to the
+// eye alone, then drops, so the title never pays for it.
 func fitViewersBadge(viewers []tmux.Viewer, known bool, selected bool, budget int) (string, int) {
 	badge := viewersBadge(viewers, known)
 	if badge == "" {
 		return "", 0
+	}
+	if budget >= 0 && cellWidth(badge) > budget {
+		badge = viewersCountBadge(viewers)
 	}
 	if budget >= 0 && cellWidth(badge) > budget {
 		badge = " " + viewersEye

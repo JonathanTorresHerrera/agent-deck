@@ -201,11 +201,17 @@
           "type": "string",
           "format": "date-time"
         },
+        "device": {
+          "type": "string"
+        },
         "height": {
           "type": "integer"
         },
         "name": {
           "type": "string"
+        },
+        "pid": {
+          "type": "integer"
         },
         "tty": {
           "type": "string"
