@@ -1,0 +1,10 @@
+[Unit]
+Description=agent-deck: hourly seat usage refresh
+
+[Timer]
+OnCalendar=hourly
+OnBootSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
