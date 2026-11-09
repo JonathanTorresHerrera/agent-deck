@@ -20,6 +20,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
@@ -45,11 +46,11 @@ type seatUsage struct {
 
 // seatUsageDir is overridable in tests.
 var seatUsageDir = func() string {
-	home, err := os.UserHomeDir()
+	dir, err := agentpaths.LegacyDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".agent-deck", "seat-usage")
+	return filepath.Join(dir, "seat-usage")
 }
 
 var seatUsageCache struct {

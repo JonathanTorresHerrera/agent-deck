@@ -12,14 +12,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/asheshgoplani/agent-deck/internal/agentpaths"
 )
 
 var seatUsageRefreshPath = func() string {
-	home, err := os.UserHomeDir()
+	dir, err := agentpaths.LegacyDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".agent-deck", "bin", "seat-usage-refresh")
+	return filepath.Join(dir, "bin", "seat-usage-refresh")
 }
 
 // kickSeatUsageRefresh starts the refresher for the given seats ("" = the
