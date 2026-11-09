@@ -24108,6 +24108,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	if session.IsClaudeCompatible(selected.Tool) {
 		// Section divider for Claude info
 		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Claude"+agentSeat, width-4) // Patch 38
+		renderSeatUsageLines(&b, selected, width-4)                                                  // Patch 54
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24321,6 +24322,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// Gemini-specific info (session ID)
 	if selected.Tool == "gemini" {
 		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Gemini"+agentSeat, width-4) // Patch 38
+		renderSeatUsageLines(&b, selected, width-4)                                                  // Patch 54
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24351,6 +24353,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// Cursor Agent CLI — MCP configuration for `cursor agent`
 	if selected.Tool == "cursor" {
 		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Cursor"+agentSeat, width-4) // Patch 38
+		renderSeatUsageLines(&b, selected, width-4)                                                  // Patch 54
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24366,6 +24369,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// OpenCode-specific info (session ID)
 	if selected.Tool == "opencode" {
 		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "OpenCode"+agentSeat, width-4) // Patch 38
+		renderSeatUsageLines(&b, selected, width-4)                                                    // Patch 54
 
 		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
@@ -24424,6 +24428,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	// Codex-specific info (session ID, detection)
 	if selected.Tool == "codex" {
 		agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, "Codex"+agentSeat, width-4) // Patch 38
+		renderSeatUsageLines(&b, selected, width-4)                                                 // Patch 54
 
 		renderToolStatusLine(&b, selected.CodexSessionID, selected.CodexDetectedAt, true, selected.IsArchived(), selected.Status)
 		renderLaunchModelInfoLines(&b, selected)
@@ -24441,6 +24446,7 @@ func (h *Home) renderPreviewPane(width, height int) string {
 				toolName = toolDef.Icon + " " + toolName
 			}
 			agentHdr = h.writePreviewSectionHeader(&b, previewSectionAgent, toolName+agentSeat, width-4) // Patch 38
+			renderSeatUsageLines(&b, selected, width-4)                                                  // Patch 54
 
 			labelStyle := lipgloss.NewStyle().Foreground(ColorText)
 

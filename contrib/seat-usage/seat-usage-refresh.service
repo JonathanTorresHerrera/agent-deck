@@ -1,0 +1,9 @@
+[Unit]
+Description=agent-deck: refresh per-seat subscription email and usage (~/.agent-deck/seat-usage)
+
+[Service]
+Type=oneshot
+Environment=HOME=/home/jtorres
+Environment=JEV_ROUTER_HOME=/home/jtorres/.aida-router
+ExecStart=/home/jtorres/.agent-deck/bin/seat-usage-refresh
+Nice=10

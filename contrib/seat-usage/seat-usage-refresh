@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""seat-usage-refresh [--seat NAME ...]
+
+Writes ~/.agent-deck/seat-usage/<seat>.json for every subscription seat (or
+only the named ones): the account email and plan, the remaining usage per
+window with reset times, when that usage was observed and when this ran.
+The agent-deck PREVIEW pane reads these files (patch 54).
+
+Local files only, no network and no paid calls:
+  Claude  email/plan  <config_dir>/.claude.json  oauthAccount
+          usage       Jev's statusLine tap  /mnt/c/Users/jonat/.aida-router/claude-quota.<seat>.json
+                      and Jev's /usage probe ~/.aida-router/claude-usage.<seat>.json (every 15 min);
+                      per window, the newer reading wins
+  Codex   email/plan  <CODEX_HOME>/auth.json  id_token claims (decoded, never printed)
+          usage       the newest rate_limits event in <CODEX_HOME>/sessions/**/rollout-*.jsonl
+
+Run hourly by seat-usage-refresh.timer and by agent-deck after a seat switch.
+"""
+import base64
+import glob
+import json
+import os
+import sys
+import time
+import tomllib
+from datetime import datetime, timezone
+
+HOME = os.path.expanduser("~")
+OUT = os.path.join(HOME, ".agent-deck", "seat-usage")
+ROUTER = os.environ.get("JEV_ROUTER_HOME", os.path.join(HOME, ".aida-router"))
+ROUTER_WIN = "/mnt/c/Users/jonat/.aida-router"
+
+
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def seats():
+    """name -> (provider, home). Jev's registry first, then deck profiles."""
+    out = {}
+    reg = load_json(os.path.join(ROUTER, "accounts.json")) or {}
+    for s in reg.get("slots", []):
+        if s.get("provider") in ("claude", "codex") and s.get("id") and s.get("home"):
+            out[s["id"]] = (s["provider"], s["home"])
+    try:
+        with open(os.path.join(HOME, ".agent-deck", "config.toml"), "rb") as f:
+            cfg = tomllib.load(f)
+    except Exception:
+        cfg = {}
+    for name, prof in (cfg.get("profiles") or {}).items():
+        for prov in ("claude", "codex"):
+            d = (prof.get(prov) or {}).get("config_dir")
+            if d and name not in out:
+                out[name] = (prov, os.path.expanduser(d))
+    d = (cfg.get("claude") or {}).get("config_dir")
+    if d:
+        d = os.path.expanduser(d)
+        if not any(h == d for _, h in out.values()):
+            out[os.path.basename(d.rstrip("/"))] = ("claude", d)
+    if "codex" not in out:
+        out["codex"] = ("codex", os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex"))
+    return out
+
+
+def epoch_iso(v):
+    try:
+        return datetime.fromtimestamp(float(v), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return None
+
+
+LABELS = {"five_hour": "5h", "seven_day": "week", "seven_day_fable": "week (Fable)",
+          "seven_day_opus": "week (Opus)", "seven_day_sonnet": "week (Sonnet)"}
+
+
+def claude_seat(name, home):
+    rec = {"seat": name, "provider": "claude"}
+    acct = (load_json(os.path.join(home, ".claude.json")) or {}).get("oauthAccount") or {}
+    rec["email"] = acct.get("emailAddress") or ""
+    rec["plan"] = acct.get("planDisplayName") or acct.get("organizationType") or ""
+    windows = {}  # name -> (observed, used, resets)
+    tap = load_json(os.path.join(ROUTER_WIN, f"claude-quota.{name}.json")) or {}
+    obs = tap.get("observed_at")
+    for wname, w in (tap.get("rate_limits") or {}).items():
+        if isinstance(w, dict) and w.get("used_percentage") is not None:
+            windows[wname] = (obs, w.get("used_percentage"), w.get("resets_at"), "statusline")
+    probe = load_json(os.path.join(ROUTER, f"claude-usage.{name}.json")) or {}
+    pobs = probe.get("observed_at")
+    for w in probe.get("windows") or []:
+        wname = w.get("name")
+        if not wname or w.get("usedPct") is None:
+            continue
+        cur = windows.get(wname)
+        if cur is None or (pobs or "") > (cur[0] or ""):
+            windows[wname] = (pobs, w.get("usedPct"), w.get("resetsAt"), "usage-probe")
+    rec["windows"] = [
+        {"name": k, "label": LABELS.get(k, k), "used_pct": v[1], "resets_at": epoch_iso(v[2]),
+         "observed_at": v[0], "source": v[3]}
+        for k, v in sorted(windows.items(), key=lambda kv: (kv[0] != "five_hour", kv[0]))
+    ]
+    obs_all = [w["observed_at"] for w in rec["windows"] if w["observed_at"]]
+    rec["usage_observed_at"] = max(obs_all) if obs_all else None
+    return rec
+
+
+def jwt_claims(token):
+    try:
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        return json.loads(base64.urlsafe_b64decode(part))
+    except Exception:
+        return {}
+
+
+def codex_seat(name, home):
+    rec = {"seat": name, "provider": "codex"}
+    auth = load_json(os.path.join(home, "auth.json")) or {}
+    claims = jwt_claims(((auth.get("tokens") or {}).get("id_token")) or "")
+    rec["email"] = claims.get("email") or ""
+    rec["plan"] = (claims.get("https://api.openai.com/auth") or {}).get("chatgpt_plan_type") or ""
+    rec["windows"], rec["usage_observed_at"] = [], None
+    files = glob.glob(os.path.join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    for path in files[:8]:  # newest few; the latest event carries the current limits
+        last = None
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if '"rate_limits"' in line:
+                        last = line
+        except Exception:
+            continue
+        if not last:
+            continue
+        try:
+            ev = json.loads(last)
+        except Exception:
+            continue
+        rl = find_key(ev, "rate_limits") or {}
+        rec["usage_observed_at"] = ev.get("timestamp")
+        for slot in ("primary", "secondary"):
+            w = rl.get(slot)
+            if isinstance(w, dict) and w.get("used_percent") is not None:
+                mins = w.get("window_minutes") or 0
+                label = "5h" if mins == 300 else "week" if mins == 10080 else f"{mins // 60}h"
+                rec["windows"].append({"name": slot, "label": label, "used_pct": w.get("used_percent"),
+                                       "resets_at": epoch_iso(w.get("resets_at")),
+                                       "observed_at": ev.get("timestamp"), "source": "session-log"})
+        if rl.get("rate_limit_reached_type"):
+            rec["note"] = str(rl["rate_limit_reached_type"]).replace("_", " ")
+        cr = rl.get("credits") or {}
+        if cr.get("has_credits") and cr.get("balance") not in (None, "0"):
+            try:
+                rec["credits"] = round(float(cr["balance"]), 2)
+            except Exception:
+                pass
+        if rl.get("plan_type") and not rec["plan"]:
+            rec["plan"] = rl["plan_type"]
+        break
+    return rec
+
+
+def find_key(o, key):
+    if isinstance(o, dict):
+        if key in o:
+            return o[key]
+        for v in o.values():
+            r = find_key(v, key)
+            if r is not None:
+                return r
+    elif isinstance(o, list):
+        for v in o:
+            r = find_key(v, key)
+            if r is not None:
+                return r
+    return None
+
+
+def write(rec):
+    os.makedirs(OUT, mode=0o700, exist_ok=True)
+    rec["checked_at"] = now_iso()
+    path = os.path.join(OUT, rec["seat"] + ".json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rec, f, indent=1)
+    os.replace(tmp, path)
+
+
+def main(argv):
+    want = set()
+    it = iter(argv)
+    for a in it:
+        if a == "--seat":
+            want.add(next(it, ""))
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+    all_seats = seats()
+    names = [n for n in all_seats if not want or n in want]
+    for n in names:
+        prov, home = all_seats[n]
+        try:
+            write(claude_seat(n, home) if prov == "claude" else codex_seat(n, home))
+        except Exception as e:  # one bad seat never stops the rest
+            print(f"seat-usage-refresh: {n}: {e}", file=sys.stderr)
+    print(f"seat-usage-refresh: {len(names)} seat(s) at {now_iso()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

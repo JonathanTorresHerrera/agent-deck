@@ -71,6 +71,9 @@ func NewSwitchAttempt(inst *Instance, target SwitchPreviewTarget, trigger string
 
 func (a *SwitchAttempt) Finish(outcome, step string, cause error) error {
 	a.Outcome, a.Step = outcome, step
+	if outcome == "success" && cause == nil {
+		kickSeatUsageRefresh(a.From, a.To) // Patch 54: preview usage follows the switch
+	}
 	if cause != nil {
 		a.Error = cause.Error()
 	}
