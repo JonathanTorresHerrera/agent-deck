@@ -1,5 +1,5 @@
  ⟨ ○ │ ○ │ ○ ⟩  Agent Deck  no sessions                                                                                                                                                        <version>
-  Archived   ● 0   ◐ 0   ○ 0   !@#& filter • 0 all • % open • ^ archived • t view • * time
+  Archived   ● 0   ◐ 0   ○ 0   ^ current·archived·all • !@#& filter • 0 all • % open • t view • * time
 SESSIONS                                                               │ PREVIEW
 ────────────────────────────────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ╭────────────────────────────────────────╮                             │
@@ -9,10 +9,10 @@ SESSIONS                                                               │ PREVI
 │                                        │                             │           No archived sessions
 │          No archived sessions          │                             │     Archive a session to see it here
 │    Archive a session to see it here    │                             │
-│                                        │                             │            • ^ back to active
-│           • ^ back to active           │                             │          • A archives a session
+│                                        │                             │            • 0 back to active
+│           • 0 back to active           │                             │               • ^ show all
+│              • ^ show all              │                             │          • A archives a session
 │         • A archives a session         │                             │
-│                                        │                             │
 │                                        │                             │
 │                                        │                             │
 │                                        │                             │

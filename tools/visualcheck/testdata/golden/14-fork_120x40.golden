@@ -1,5 +1,5 @@
  ⟨ ● │ ◐ │ ◐ ⟩  Agent Deck  ● 1 running • ◐ 3 waiting • ○ 1 idle • ■ 2 stopped • ✕ 5 error                      <version>
-  All    ● 1   ◐ 3   ○ 1   ■ 2   ✕ 5    C Claude 4 (1▶) · $ shell 1  !@#& filter • 0 all • % open • ^ archived • …
+  All    ● 1   ◐ 3   ○ 1   ■ 2   ✕ 5    C Claude 4 (1▶) · $ shell 1  !@#& filter • 0 all • % open • …
 SESSIONS                                   │ PREVIEW
 ────────────────────────────────────────── │ ───────────────────────────────────────────────────────────────────────────
 1·▾ alpha (8) ● 1 ◐ 2                      │ claude-waiting (fork)  ◐ waiting

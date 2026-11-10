@@ -98,8 +98,12 @@ func stepStateVisibility(w *widthRun) error {
 				}
 			}
 		case "^":
-			if err := w.send("^"); err != nil {
-				return err
+			// Patch 55: ^ cycles current -> archived -> all -> current, so
+			// two more presses return to the active list.
+			for i := 0; i < 2; i++ {
+				if err := w.send("^"); err != nil {
+					return err
+				}
 			}
 		}
 		if err := w.waitContains("alpha", 5*time.Second); err != nil {
