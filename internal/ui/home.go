@@ -3408,13 +3408,12 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				if inst == nil {
 					continue
 				}
-				// Patch 55: in the All scope an archived row filters as
-				// stopped (scopeStatus); otherwise archived rows never match.
-				archived := inst.IsArchived()
-				if archived && !scopeAll {
+				// Archived rows have no live status, so no status filter
+				// matches them (patch 55: in the All scope too).
+				if inst.IsArchived() {
 					continue
 				}
-				if h.matchesStatusFilter(h.statusFilter, h.scopeStatus(archived, inst.Status)) {
+				if h.matchesStatusFilter(h.statusFilter, inst.Status) {
 					markGroupPathAndAncestors(groupsWithMatches, group.Path)
 				}
 			}
@@ -3430,7 +3429,8 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				}
 			} else if item.Type == session.ItemTypeSession && item.Session != nil {
 				// Keep session if it matches the filter
-				if h.matchesStatusFilter(h.statusFilter, h.scopeStatus(item.Session.IsArchived(), item.Session.Status)) {
+				// Patch 55: archived rows (All scope) never match a status filter.
+				if !item.Session.IsArchived() && h.matchesStatusFilter(h.statusFilter, item.Session.Status) {
 					filtered = append(filtered, item)
 				}
 			}
@@ -3505,10 +3505,11 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				if inst == nil || !h.archivedInRenderedPartition(inst.IsArchived()) {
 					continue
 				}
-				// Patch 55: an archived row in the All scope filters and
-				// hides as stopped, like the status passes above.
+				// Patch 55: in the All scope an archived row never passes a
+				// status filter and hides with the stopped chip, like the
+				// status passes above.
 				status := h.scopeStatus(inst.IsArchived(), inst.Status)
-				if h.statusFilter != "" && !viewArchived && !h.matchesStatusFilter(h.statusFilter, status) {
+				if h.statusFilter != "" && !viewArchived && (inst.IsArchived() || !h.matchesStatusFilter(h.statusFilter, status)) {
 					continue
 				}
 				if !viewArchived && h.statusHidden(status) {

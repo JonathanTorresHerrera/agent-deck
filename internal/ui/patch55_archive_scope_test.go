@@ -135,6 +135,14 @@ func TestPatch55_StatusFilterInAllScopeExcludesArchivedRows(t *testing.T) {
 	h.statusFilter = FilterModeActive
 	h.rebuildFlatItems()
 	p55Want(t, h, "open filter", "a-run", "a-wait")
+	// Archived rows count as stopped, but no status filter shows them.
+	h.statusFilter = session.StatusStopped
+	h.rebuildFlatItems()
+	p55Want(t, h, "stopped filter", "a-stop")
+	h.activeFilterExcludes = map[session.Status]bool{}
+	h.statusFilter = FilterModeActive
+	h.rebuildFlatItems()
+	p55Want(t, h, "open filter, nothing excluded", "a-run", "a-wait", "a-stop")
 	if !h.showingAllArchiveScope() {
 		t.Fatal("a status filter must not leave the All scope")
 	}
