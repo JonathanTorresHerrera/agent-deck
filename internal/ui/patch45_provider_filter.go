@@ -190,7 +190,7 @@ func (h *Home) toggleProviderFilter(key string) {
 // group headers that still hold one of them. Group membership comes from the
 // full group tree (as in applyHiddenStatuses), so a collapsed group that holds
 // a match keeps its header.
-func (h *Home) applyProviderFilter(items []session.Item, viewArchived bool) []session.Item {
+func (h *Home) applyProviderFilter(items []session.Item) []session.Item {
 	match := func(inst *session.Instance) bool {
 		return inst != nil && providerKey(inst.Tool) == h.providerFilter
 	}
@@ -201,7 +201,8 @@ func (h *Home) applyProviderFilter(items []session.Item, viewArchived bool) []se
 				continue
 			}
 			for _, inst := range group.Sessions {
-				if match(inst) && inst.IsArchived() == viewArchived {
+				// Patch 55: the shared partition rule (both partitions in All).
+				if match(inst) && h.archivedInRenderedPartition(inst.IsArchived()) {
 					markGroupPathAndAncestors(groupsWithMatches, group.Path)
 				}
 			}

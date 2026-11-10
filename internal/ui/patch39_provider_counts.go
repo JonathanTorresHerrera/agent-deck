@@ -30,7 +30,8 @@ func (h *Home) providerCounts() []providerCount {
 		if state.archivedSuperseded || !h.archivedInRenderedPartition(state.archived) {
 			continue
 		}
-		switch statusBucket(state.status) {
+		// Patch 55: an archived row in the All scope is stopped, not live.
+		switch statusBucket(h.scopeStatus(state.archived, state.status)) {
 		case session.StatusRunning, session.StatusWaiting, session.StatusIdle:
 		default:
 			continue
