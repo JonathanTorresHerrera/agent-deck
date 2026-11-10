@@ -76,7 +76,7 @@ func TestHelpOverlayShowsArchiveKeys(t *testing.T) {
 	overlay.Show()
 
 	view := overlay.View()
-	for _, want := range []string{"Archive session", "Unarchive session", "Toggle archived view"} {
+	for _, want := range []string{"Archive session", "Unarchive session", "Cycle current/archived/all"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("help overlay should document archive key %q (#1325), got %q", want, view)
 		}

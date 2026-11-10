@@ -361,6 +361,7 @@ type Home struct {
 	isAttaching         atomic.Bool             // Prevents View() output during attach (fixes Bubble Tea Issue #431) - atomic for thread safety
 	lastRenderedFrame   string                  // Last non-empty frame View produced; re-served while isAttaching so no frame is ever black (#1753). Event-loop goroutine only.
 	statusFilter        session.Status          // Filter sessions by status ("" = all, or specific status)
+	archiveScopeAll     bool                    // Patch 55: All archive scope (active+archived rows); read via archiveScope(), the archived filter wins
 	hiddenStatuses      map[session.Status]bool // Patch 28: statuses toggled OFF by clicking their chip (hidden from the list; independent of statusFilter)
 	chipHitboxes        []statusChipHitbox      // Patch 28: clickable chip column ranges recorded by the last render
 	groupScope          string                  // Limit TUI to a specific group path ("" = all groups)
@@ -648,9 +649,9 @@ type Home struct {
 	// Cached status counts (invalidated on instance changes)
 	cachedStatusCounts struct {
 		running, waiting, idle, stopped, errored int
-		valid                                    atomic.Bool // THREAD-SAFE: accessed from main and worker goroutines
-		timestamp                                time.Time   // For time-based expiration
-		archived                                 bool        // Patch 38: partition the cached counts were taken for
+		valid                                    atomic.Bool  // THREAD-SAFE: accessed from main and worker goroutines
+		timestamp                                time.Time    // For time-based expiration
+		scope                                    archiveScope // Patch 38/55: archive scope the cached counts were taken for
 	}
 
 	// Status-transition tracker: emits enriched status_changed INFO,
@@ -1086,6 +1087,7 @@ type uiState struct {
 	CursorGroupPath string `json:"cursor_group_path,omitempty"`
 	PreviewMode     int    `json:"preview_mode"`
 	StatusFilter    string `json:"status_filter,omitempty"`
+	ArchiveScopeAll bool   `json:"archive_scope_all,omitempty"` // Patch 55
 	GroupViewMode   int    `json:"group_view_mode,omitempty"`
 	TimeFilterMode  int    `json:"time_filter_mode,omitempty"`
 	// Collapsed remote headers, keyed like Item.Path. Local group folds live in
@@ -3362,8 +3364,13 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	// Partition archived vs active before status filters. Group membership is
 	// resolved from the full group tree — not the flattened view — so
 	// collapsed groups still show their headers when they contain matches.
-	viewArchived := h.statusFilter == FilterModeArchived
-	if viewArchived || h.hasArchivedSessions() {
+	//
+	// Patch 55: in the All scope both partitions stay, so there is nothing to
+	// partition: every group header and every session row is kept, exactly
+	// as Flatten produced them.
+	viewArchived := h.renderingArchivedPartition()
+	scopeAll := h.showingAllArchiveScope()
+	if !scopeAll && (viewArchived || h.hasArchivedSessions()) {
 		groupsWithMatches := h.archiveGroupsWithMatches(viewArchived)
 		partitioned := make([]session.Item, 0, len(allItems))
 		for _, item := range allItems {
@@ -3398,7 +3405,15 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				continue
 			}
 			for _, inst := range group.Sessions {
-				if inst != nil && !inst.IsArchived() && h.matchesStatusFilter(h.statusFilter, inst.Status) {
+				if inst == nil {
+					continue
+				}
+				// Archived rows have no live status, so no status filter
+				// matches them (patch 55: in the All scope too).
+				if inst.IsArchived() {
+					continue
+				}
+				if h.matchesStatusFilter(h.statusFilter, inst.Status) {
 					markGroupPathAndAncestors(groupsWithMatches, group.Path)
 				}
 			}
@@ -3414,7 +3429,8 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				}
 			} else if item.Type == session.ItemTypeSession && item.Session != nil {
 				// Keep session if it matches the filter
-				if h.matchesStatusFilter(h.statusFilter, item.Session.Status) {
+				// Patch 55: archived rows (All scope) never match a status filter.
+				if !item.Session.IsArchived() && h.matchesStatusFilter(h.statusFilter, item.Session.Status) {
 					filtered = append(filtered, item)
 				}
 			}
@@ -3438,7 +3454,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 	// Patch 45 (provider filter): only the clicked provider's sessions. Applies
 	// in the archived view too and stacks with every status filter.
 	if h.providerFilter != "" {
-		h.flatItems = h.applyProviderFilter(h.flatItems, viewArchived)
+		h.flatItems = h.applyProviderFilter(h.flatItems)
 	}
 
 	// Use one remote snapshot for recency fallback and row construction.
@@ -3454,9 +3470,10 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		// session, like an empty local group renders "name (0)", so a fresh
 		// remote or one whose last session was archived stays a target for
 		// n, N and g. The archived view and any filter hide such a remote.
+		// Patch 55: the All scope keeps both (archivedInRenderedPartition).
 		partitioned := make([]session.RemoteSessionInfo, 0, len(sessions))
 		for _, remote := range sessions {
-			if remote.Archived == viewArchived {
+			if h.archivedInRenderedPartition(remote.Archived) {
 				partitioned = append(partitioned, remote)
 			}
 		}
@@ -3485,13 +3502,17 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 				continue
 			}
 			for _, inst := range group.Sessions {
-				if inst == nil || inst.IsArchived() != viewArchived {
+				if inst == nil || !h.archivedInRenderedPartition(inst.IsArchived()) {
 					continue
 				}
-				if h.statusFilter != "" && !viewArchived && !h.matchesStatusFilter(h.statusFilter, inst.Status) {
+				// Patch 55: in the All scope an archived row never passes a
+				// status filter and hides with the stopped chip, like the
+				// status passes above.
+				status := h.scopeStatus(inst.IsArchived(), inst.Status)
+				if h.statusFilter != "" && !viewArchived && (inst.IsArchived() || !h.matchesStatusFilter(h.statusFilter, status)) {
 					continue
 				}
-				if !viewArchived && h.statusHidden(inst.Status) {
+				if !viewArchived && h.statusHidden(status) {
 					continue
 				}
 				hasCandidates = true
@@ -3554,7 +3575,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 		// not by the (absent) session rows under a collapsed header. It honors the
 		// archive view so a group whose sessions are all archived counts as empty
 		// in the active view and sinks below the divider.
-		activity := h.groupTree.GroupActivityMap(viewArchived)
+		activity := h.groupActivityForScope() // Patch 55: both partitions in All
 		h.flatItems = session.PartitionByViewMode(h.flatItems, h.groupViewMode, activity)
 	}
 
@@ -10477,9 +10498,14 @@ func (h *Home) cursorToSession(id string) bool {
 // to the archived view instead of leaving it.
 func (h *Home) clearFiltersHiding(inst *session.Instance) string {
 	var names []string
-	if inst.IsArchived() {
+	scopeAll := h.showingAllArchiveScope()
+	// Patch 55: in the All scope an archived row is already in the list, so
+	// the scope stays; only a status filter or a hidden stopped chip (archived
+	// rows count as stopped there) can keep it out.
+	rowStatus := h.scopeStatus(inst.IsArchived(), inst.Status)
+	if inst.IsArchived() && !scopeAll {
 		if h.statusFilter != FilterModeArchived {
-			h.statusFilter = FilterModeArchived
+			h.setArchiveScope(archiveScopeArchived)
 			names = append(names, "active view (switched to archived)")
 		}
 	} else if h.statusFilter != "" {
@@ -10491,7 +10517,7 @@ func (h *Home) clearFiltersHiding(inst *session.Instance) string {
 		names = append(names, "time filter")
 	}
 	// Patch 28: a status chip toggled off hides the match as surely as a filter.
-	if !inst.IsArchived() && h.statusHidden(inst.Status) {
+	if (!inst.IsArchived() || scopeAll) && h.statusHidden(rowStatus) {
 		h.clearHiddenStatuses()
 		names = append(names, "hidden status chips")
 	}
@@ -12786,7 +12812,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "shift+u":
-		if h.statusFilter != FilterModeArchived {
+		// Patch 55: archived rows are also on screen in the All scope.
+		if h.archiveScope() == archiveScopeCurrent {
 			return h, nil
 		}
 		if h.cursor < len(h.flatItems) {
@@ -13387,7 +13414,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, h.changeStatusFilter(FilterModeActive)
 
 	case FilterKeyArchived, "shift+6":
-		return h, h.changeStatusFilter(FilterModeArchived)
+		// Patch 55: cycle the archive scope, current -> archived -> all.
+		h.cycleArchiveScope()
+		return h, h.fetchSelectedPreview()
 	}
 
 	return h, nil
@@ -15468,6 +15497,7 @@ func (h *Home) saveUIStateErr() error {
 	state := uiState{
 		PreviewMode:            int(h.previewMode),
 		StatusFilter:           string(h.statusFilter),
+		ArchiveScopeAll:        h.showingAllArchiveScope(),
 		GroupViewMode:          int(h.groupViewMode),
 		TimeFilterMode:         int(h.timeFilter),
 		RemoteSessionOrder:     h.remoteSessionOrder,
@@ -15550,6 +15580,7 @@ func (h *Home) loadUIState() {
 	// Apply preview mode, status filter, and group view mode immediately
 	h.previewMode = PreviewMode(state.PreviewMode)
 	h.statusFilter = session.Status(state.StatusFilter)
+	h.archiveScopeAll = state.ArchiveScopeAll && h.statusFilter != FilterModeArchived // Patch 55
 	h.groupViewMode = session.GroupViewMode(state.GroupViewMode)
 	if h.groupViewMode < session.GroupViewNormal || h.groupViewMode >= session.GroupViewModeCount {
 		h.groupViewMode = session.GroupViewNormal
@@ -15580,6 +15611,7 @@ func (h *Home) loadUIState() {
 func (h *Home) applyUIState(state uiState) {
 	h.previewMode = PreviewMode(state.PreviewMode)
 	h.statusFilter = session.Status(state.StatusFilter)
+	h.archiveScopeAll = state.ArchiveScopeAll && h.statusFilter != FilterModeArchived // Patch 55
 	h.groupViewMode = session.GroupViewMode(state.GroupViewMode)
 	if h.groupViewMode < session.GroupViewNormal || h.groupViewMode >= session.GroupViewModeCount {
 		h.groupViewMode = session.GroupViewNormal
@@ -18764,8 +18796,9 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 	const cacheDuration = 500 * time.Millisecond
 	// Patch 38 (responsive): the counts follow the rendered archive partition,
 	// so a cache taken for the other partition (the ^ view just toggled) is stale.
-	archivedView := h.renderingArchivedPartition()
-	if h.cachedStatusCounts.valid.Load() && h.cachedStatusCounts.archived == archivedView &&
+	// Patch 55: keyed by the archive scope (three values), not a bool.
+	scope := h.archiveScope()
+	if h.cachedStatusCounts.valid.Load() && h.cachedStatusCounts.scope == scope &&
 		time.Since(h.cachedStatusCounts.timestamp) < cacheDuration {
 		return h.cachedStatusCounts.running, h.cachedStatusCounts.waiting,
 			h.cachedStatusCounts.idle, h.cachedStatusCounts.stopped,
@@ -18796,7 +18829,8 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 		if !h.archivedInRenderedPartition(archived) {
 			continue
 		}
-		switch statusBucket(state.status) {
+		// Patch 55: in the All scope an archived row counts as stopped.
+		switch statusBucket(h.scopeStatus(archived, state.status)) {
 		case session.StatusRunning:
 			running++
 		case session.StatusWaiting:
@@ -18834,7 +18868,7 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 			if !h.archivedInRenderedPartition(rs.Archived) { // Patch 38: same rule as local rows
 				continue
 			}
-			switch statusBucket(session.Status(rs.Status)) {
+			switch statusBucket(h.scopeStatus(rs.Archived, session.Status(rs.Status))) { // Patch 55
 			case session.StatusRunning:
 				if stale {
 					continue
@@ -18859,7 +18893,7 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, stopped, errored 
 	h.cachedStatusCounts.idle = idle
 	h.cachedStatusCounts.stopped = stopped
 	h.cachedStatusCounts.errored = errored
-	h.cachedStatusCounts.archived = archivedView
+	h.cachedStatusCounts.scope = scope
 	h.cachedStatusCounts.valid.Store(true)
 	h.cachedStatusCounts.timestamp = time.Now()
 	return running, waiting, idle, stopped, errored
@@ -18916,10 +18950,11 @@ func (h *Home) renderFilterBar() string {
 	if h.statusFilter != "" {
 		addPill("", true, activePillStyle.Render(filterLabel), "")
 	} else if len(h.hiddenStatuses) == 0 {
-		addPill("", true, activePillStyle.Render("All"), " ")
+		// Patch 55: filterLabel reads "All+archived" in the All archive scope.
+		addPill("", true, activePillStyle.Render(filterLabel), " ")
 	} else {
 		// Patch 28: chips toggled off; clicking All shows everything again.
-		addPill("", true, dimPillStyle.Render("All"), " ")
+		addPill("", true, dimPillStyle.Render(filterLabel), " ")
 	}
 
 	runningLabel := fmt.Sprintf("● %d", running)
@@ -19035,10 +19070,12 @@ func (h *Home) renderFilterBar() string {
 	// running figure, then disappear. Pills are never cut.
 	counts := h.providerCountsForBar() // Patch 45: keeps a filtered provider with no live session
 	var providers, hint string
+	var fitted fittedFilterBarHint
 	for level := 0; level <= 2; level++ {
 		providers = renderProviderCountsSel(counts, level, h.providerFilter) // Patch 45
 		used := cellWidth(pillsRow) + cellWidth(providers)
-		hint = h.fitFilterBarHint(used)
+		fitted = h.fitFilterBarHintSegs(used)
+		hint = fitted.hint
 		if h.width <= 0 || used+cellWidth(hint) <= h.width {
 			break
 		}
@@ -19052,6 +19089,10 @@ func (h *Home) renderFilterBar() string {
 	filterRow := pillsRow + providers + hint
 	// Patch 45: provider counts are click targets (filter to that provider).
 	h.recordProviderHitboxes(counts, cellWidth(pillsRow), providers)
+	// Patch 55: so are the archive scope control's words, when shown.
+	if hint != "" {
+		h.recordArchiveScopeHitboxes(fitted, cellWidth(pillsRow)+cellWidth(providers))
+	}
 
 	return lipgloss.NewStyle().
 		MaxWidth(h.width).
@@ -19078,6 +19119,9 @@ func (h *Home) statusFilterLabel() string {
 	case session.StatusError:
 		return "Error"
 	default:
+		if h.showingAllArchiveScope() {
+			return "All+archived" // Patch 55: the All archive scope
+		}
 		return "All"
 	}
 }
@@ -19089,11 +19133,36 @@ func (h *Home) statusFilterLabel() string {
 // ellipsis is appended only when a segment was actually dropped, and the cut
 // always lands on a "• " boundary rather than mid-word.
 func (h *Home) fitFilterBarHint(usedWidth int) string {
-	dim := lipgloss.NewStyle().Foreground(ColorComment).Faint(true)
-	const leadIn = "  "
-	const sep = " • "
+	return h.fitFilterBarHintSegs(usedWidth).hint
+}
 
-	segs := h.renderFilterBarHint()
+// fittedFilterBarHint is one fitted filter-bar hint: the rendered text, the
+// segments it was built from, how many leading segments it kept, and the index
+// of the archive scope control among them.
+type fittedFilterBarHint struct {
+	hint     string
+	segs     []string
+	kept     int
+	scopeIdx int
+}
+
+// Filter-bar hint layout: the lead-in before the first segment and the
+// separator between segments (patch 55 measures them for its hitboxes).
+const (
+	filterBarHintLeadIn = "  "
+	filterBarHintSep    = " • "
+)
+
+// fitFilterBarHintSegs is fitFilterBarHint that also returns the segments it
+// laid out and how many of them it kept, so a caller can locate a kept
+// segment's columns (patch 55's archive scope control).
+func (h *Home) fitFilterBarHintSegs(usedWidth int) fittedFilterBarHint {
+	dim := lipgloss.NewStyle().Foreground(ColorComment).Faint(true)
+	const leadIn = filterBarHintLeadIn
+	const sep = filterBarHintSep
+
+	segs, scopeIdx := h.renderFilterBarHintSegs()
+	kept := 0
 	available := h.width - usedWidth
 	// An uninitialized terminal width, or pills that already fill the bar,
 	// leave nothing meaningful to budget against: keep every segment and let
@@ -19107,7 +19176,6 @@ func (h *Home) fitFilterBarHint(usedWidth int) string {
 	ellipsisReserve := sepWidth + cellWidth("…")
 
 	used := cellWidth(leadIn)
-	kept := 0
 	for i, seg := range segs {
 		next := used + cellWidth(seg)
 		if kept > 0 {
@@ -19134,7 +19202,7 @@ func (h *Home) fitFilterBarHint(usedWidth int) string {
 			hint = dim.Render(leadIn + "…")
 		}
 	}
-	return hint
+	return fittedFilterBarHint{hint: hint, segs: segs, kept: kept, scopeIdx: scopeIdx}
 }
 
 // updateSizes updates component sizes
@@ -20144,7 +20212,8 @@ func renderEmptyStateResponsive(config EmptyStateConfig, width, height int) stri
 // filteredEmptyState describes an empty view without treating it as a new workspace.
 func (h *Home) filteredEmptyState() (EmptyStateConfig, bool) {
 	if h.statusFilter == FilterModeArchived {
-		hints := []string{FilterKeyArchived + " back to active"}
+		// Patch 55: ^ moves on to the All scope; 0 is the way back to active.
+		hints := []string{"0 back to active", FilterKeyArchived + " show all"}
 		if key := h.actionKey(hotkeyArchiveSession); key != "" {
 			hints = append(hints, key+" archives a session")
 		}
@@ -22002,7 +22071,7 @@ func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map
 			if ok {
 				status = state.status
 			}
-			switch status {
+			switch h.scopeStatus(sess.IsArchived(), status) { // Patch 55: archived = stopped in All
 			case session.StatusRunning:
 				directRunning++
 			case session.StatusWaiting:
@@ -22495,6 +22564,10 @@ func (h *Home) renderSessionItem(
 		sandboxBadge = sbStyle.Render(" [sandbox]")
 	}
 
+	// Patch 55: in the All archive scope an archived row says so, so it is
+	// not mistaken for a stopped active session (both draw the stopped glyph).
+	archivedBadge := h.archivedRowBadge(inst.IsArchived(), selected)
+
 	// Multi-repo badge for multi-repo sessions.
 	multiRepoBadge := ""
 	if inst.IsMultiRepo() {
@@ -22635,7 +22708,7 @@ func (h *Home) renderSessionItem(
 			title:       displayTitle,
 			titleStyle:  titleStyle,
 			details: []string{accountBadge, timestampBadge, tool, maestroBadge, yoloBadge,
-				worktreeBadge, sandboxBadge, multiRepoBadge, sshBadge, agentBadge,
+				worktreeBadge, sandboxBadge, archivedBadge, multiRepoBadge, sshBadge, agentBadge,
 				viewersBadgeText, aidaBadge},
 			subtitle: subtitle,
 		})
@@ -22648,7 +22721,7 @@ func (h *Home) renderSessionItem(
 		cellWidth(treeStyle.Render(treeConnector)) + cellWidth(windowChevron) +
 		cellWidth(status) + 1 + cellWidth(tool) +
 		cellWidth(maestroBadge) + cellWidth(yoloBadge) + cellWidth(worktreeBadge) +
-		cellWidth(sandboxBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
+		cellWidth(sandboxBadge) + cellWidth(archivedBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
 		cellWidth(agentBadge) + cellWidth(aidaBadge) + cellWidth(timestampBadge)
 	// Keep a useful title before spending narrow-row space on a worktree badge.
 	if listWidth > 0 && listWidth < 40 && worktreeBadge != "" {
@@ -22723,7 +22796,7 @@ func (h *Home) renderSessionItem(
 	// The leading gutter (leftGutterWidth) keeps sessions aligned with group
 	// rows, which reserve the same gutter for root hotkey numbers.
 	row := fmt.Sprintf(
-		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		strings.Repeat(" ", leftGutterWidth),
 		baseIndent,
 		selectionPrefix,
@@ -22736,6 +22809,7 @@ func (h *Home) renderSessionItem(
 		yoloBadge,
 		worktreeBadge,
 		sandboxBadge,
+		archivedBadge,
 		multiRepoBadge,
 		sshBadge,
 		agentBadge,
@@ -22850,10 +22924,9 @@ func (h *Home) renderWindowItem(b *strings.Builder, item session.Item, selected 
 // Caller holds h.remoteSessionsMu (read).
 func (h *Home) remoteSessionsInView(remoteName string) []session.RemoteSessionInfo {
 	all := h.remoteSessions[remoteName]
-	viewArchived := h.statusFilter == FilterModeArchived
 	inView := make([]session.RemoteSessionInfo, 0, len(all))
 	for _, rs := range all {
-		if rs.Archived == viewArchived {
+		if h.archivedInRenderedPartition(rs.Archived) { // Patch 55: both in All
 			inView = append(inView, rs)
 		}
 	}
@@ -25408,7 +25481,7 @@ func (h *Home) renderGroupPreview(group *session.Group, width, height int) strin
 	// produced an error tally against a group with no reachable error rows.
 	running, waiting, idle, stopped, errored := 0, 0, 0, 0, 0
 	for _, sess := range visibleSessions {
-		switch statusBucket(sess.Status) {
+		switch statusBucket(h.scopeStatus(sess.IsArchived(), sess.Status)) { // Patch 55
 		case session.StatusRunning:
 			running++
 		case session.StatusWaiting:
@@ -26370,6 +26443,13 @@ func (h *Home) matchesStatusFilter(filter, status session.Status) bool {
 // overflow, instead of lipgloss.MaxWidth hard-cutting mid-word (finding #2,
 // cosmetic TUI review: 80x24 cut "t view • * time" down to "t v").
 func (h *Home) renderFilterBarHint() []string {
+	segs, _ := h.renderFilterBarHintSegs()
+	return segs
+}
+
+// renderFilterBarHintSegs is renderFilterBarHint plus the index of the patch-55
+// archive scope control among the segments, for its click targets.
+func (h *Home) renderFilterBarHintSegs() (segs []string, scopeIdx int) {
 	dim := lipgloss.NewStyle().Foreground(ColorComment).Faint(true)
 	hi := lipgloss.NewStyle().Foreground(ColorTextDim) // same hue, no Faint
 
@@ -26385,7 +26465,7 @@ func (h *Home) renderFilterBarHint() []string {
 	}
 
 	// Selected modes lead the legend, so they survive its width budget.
-	var segs []string
+	scopeIdx = -1
 	if h.timeFilter != session.TimeFilterAll {
 		label := h.timeFilter.Label()
 		if h.width <= 80 {
@@ -26410,6 +26490,12 @@ func (h *Home) renderFilterBarHint() []string {
 		}
 		segs = append(segs, mark("t", true)+dim.Render(" "+label))
 	}
+	// Patch 55: a non-default archive scope is a selected mode too. It follows
+	// the time and view modes (the first pill already names the scope).
+	if h.archiveScope() != archiveScopeCurrent {
+		scopeIdx = len(segs)
+		segs = append(segs, h.renderArchiveScopeControl())
+	}
 	segs = append(segs, []string{
 		mark("!", h.statusFilter == session.StatusRunning) +
 			mark("@", h.statusFilter == session.StatusWaiting) +
@@ -26418,8 +26504,14 @@ func (h *Home) renderFilterBarHint() []string {
 			dim.Render(" filter"),
 		mark("0", h.statusFilter == "") + dim.Render(" all"),
 		mark(FilterKeyActive, h.statusFilter == FilterModeActive) + dim.Render(" open"),
-		mark(FilterKeyArchived, h.statusFilter == FilterModeArchived) + dim.Render(" archived"),
 	}...)
+	// Patch 55: the archive scope control, "^ current·archived·all" with the
+	// active scope highlighted. Each word is a click target (see
+	// recordArchiveScopeHitboxes); ^ cycles through them.
+	if scopeIdx < 0 {
+		scopeIdx = len(segs)
+		segs = append(segs, h.renderArchiveScopeControl())
+	}
 
 	// View-mode indicator (running-on-top / populated-on-top), only when active.
 	if h.groupViewMode == session.GroupViewNormal {
@@ -26430,7 +26522,7 @@ func (h *Home) renderFilterBarHint() []string {
 	if h.timeFilter == session.TimeFilterAll {
 		segs = append(segs, mark(timeFilterKey, false)+dim.Render(" time"))
 	}
-	return segs
+	return segs, scopeIdx
 }
 
 type remoteCreationCatalogFetchedMsg struct {

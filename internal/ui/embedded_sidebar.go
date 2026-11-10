@@ -252,6 +252,11 @@ func (h *Home) renderEmbeddedSessionItem(
 	if statusText == "" {
 		statusText = string(session.StatusIdle)
 	}
+	// Patch 55: in the All archive scope an archived row's stored status is
+	// stale; its metadata names it archived instead (the classic row's badge).
+	if inst.IsArchived() && h.showingAllArchiveScope() {
+		statusText = "archived"
+	}
 	tool := strings.ToLower(strings.TrimSpace(state.tool))
 	if tool == "" {
 		tool = strings.ToLower(strings.TrimSpace(inst.Tool))

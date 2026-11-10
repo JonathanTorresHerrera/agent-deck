@@ -1,17 +1,17 @@
  ⟨ ○ │ ○ │ ○ ⟩  Agent Deck  no sessions                                <version>
-  Archived   ● 0   ◐ 0   ○ 0   !@#& filter • 0 all • % open • ^ archived • …
+  Archived   ● 0   ◐ 0   ○ 0   ^ current·archived·all • !@#& filter • 0 all • …
 SESSIONS                     │ PREVIEW
 ──────────────────────────── │ ─────────────────────────────────────────────────
 ╭──────────────────────╮     │
 │          ◇           │     │
 │ No archived sessions │     │                    ◇
-│  • ^ back to active  │     │
+│  • 0 back to active  │     │
 │                      │     │           No archived sessions
 │                      │     │     Archive a session to see it here
 │                      │     │
-│                      │     │            • ^ back to active
+│                      │     │            • 0 back to active
+│                      │     │               • ^ show all
 │                      │     │          • A archives a session
-│                      │     │
 │                      │     │
 │                      │     │
 │                      │     │

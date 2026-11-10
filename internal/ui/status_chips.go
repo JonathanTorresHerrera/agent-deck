@@ -31,8 +31,11 @@ type statusChipHitbox struct {
 	all    bool           // the "All" chip: reset every toggle and filter
 	// provider (patch 45) marks a provider-count target: filter to it.
 	provider string
-	x0, x1   int
-	y        int
+	// scopeTarget (patch 55) marks an archive scope word: select scope.
+	scopeTarget bool
+	scope       archiveScope
+	x0, x1      int
+	y           int
 }
 
 // statusHidden reports whether status was toggled off via its chip.
@@ -90,7 +93,16 @@ func (h *Home) applyHiddenStatuses(items []session.Item) []session.Item {
 				continue
 			}
 			for _, inst := range group.Sessions {
-				if inst != nil && !inst.IsArchived() && !h.statusHidden(inst.Status) {
+				if inst == nil {
+					continue
+				}
+				// Patch 55: archived rows are on screen only in the All scope,
+				// where they hide with the stopped chip (scopeStatus).
+				archived := inst.IsArchived()
+				if !h.archivedInRenderedPartition(archived) {
+					continue
+				}
+				if !h.statusHidden(h.scopeStatus(archived, inst.Status)) {
 					markGroupPathAndAncestors(groupsWithMatches, group.Path)
 				}
 			}
@@ -104,7 +116,7 @@ func (h *Home) applyHiddenStatuses(items []session.Item) []session.Item {
 				out = append(out, item)
 			}
 		case item.Type == session.ItemTypeSession && item.Session != nil:
-			if !h.statusHidden(item.Session.Status) {
+			if !h.statusHidden(h.scopeStatus(item.Session.IsArchived(), item.Session.Status)) {
 				out = append(out, item)
 			}
 		default:
@@ -122,7 +134,9 @@ func (h *Home) handleStatusChipClick(msg tea.MouseMsg) bool {
 		if msg.Y != c.y || msg.X < c.x0 || msg.X >= c.x1 {
 			continue
 		}
-		if c.provider != "" {
+		if c.scopeTarget {
+			h.selectArchiveScope(c.scope)
+		} else if c.provider != "" {
 			h.toggleProviderFilter(c.provider)
 		} else if c.all {
 			h.resetStatusChips()
