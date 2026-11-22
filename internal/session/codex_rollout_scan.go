@@ -444,7 +444,20 @@ func codexOffsetAtTime(r io.ReaderAt, size int64, notBefore time.Time) (int64, e
 // notBefore. Every candidate must also carry a timestamp no earlier than
 // notBefore minus the clock slack, so an offset that does not describe this
 // file (a replaced rollout) cannot attribute an old record.
+// codexCutContext is the turn context at a cut: whether a turn was open and
+// whether its opening prompt was already written.
+type codexCutContext struct {
+	open, promptSeen bool
+}
+
 func codexDeliveryEvidenceIn(path, sessionID string, cutOffset int64, notBefore time.Time) (*CodexDeliveryEvidence, error) {
+	return codexDeliveryEvidenceWithContext(path, sessionID, cutOffset, notBefore, nil)
+}
+
+// codexDeliveryEvidenceWithContext is codexDeliveryEvidenceIn for a caller
+// that may already know the turn context at cutOffset (the acceptance
+// fence); known is ignored when the offset does not describe the file.
+func codexDeliveryEvidenceWithContext(path, sessionID string, cutOffset int64, notBefore time.Time, known *codexCutContext) (*CodexDeliveryEvidence, error) {
 	f, err := os.Open(path) // #nosec G304 -- callers resolve one exact, non-symlink rollout
 	if err != nil {
 		return nil, err
@@ -470,11 +483,16 @@ func codexDeliveryEvidenceIn(path, sessionID string, cutOffset int64, notBefore 
 			return nil, err
 		}
 	}
-	before, err := scanCodexTurnState(f, cut)
-	if err != nil {
-		return nil, err
+	var open, promptSeen bool
+	if known != nil && basis == CodexEvidenceBasisOffset {
+		open, promptSeen = known.open, known.promptSeen
+	} else {
+		before, err := scanCodexTurnState(f, cut)
+		if err != nil {
+			return nil, err
+		}
+		open, promptSeen = before.Open, before.PromptSeen
 	}
-	open, promptSeen := before.Open, before.PromptSeen
 	var evidence *CodexDeliveryEvidence
 	if _, err := scanCodexRolloutForward(f, size, cut, func(offset int64, line []byte) bool {
 		record := classifyCodexRolloutLine(line)
@@ -543,4 +561,19 @@ func (i *Instance) CodexDeliveryEvidenceSince(cutOffset int64, notBefore time.Ti
 		return nil, err
 	}
 	return codexDeliveryEvidenceIn(path, i.CodexSessionID, cutOffset, notBefore)
+}
+
+// CodexDeliveryEvidenceAfter is CodexDeliveryEvidenceSince for the sender
+// that captured fence: the turn context at the fence is already known, so
+// only the bytes written after it are read.
+func (i *Instance) CodexDeliveryEvidenceAfter(fence CodexTurnState, notBefore time.Time) (*CodexDeliveryEvidence, error) {
+	path, err := i.codexRolloutPath()
+	if errors.Is(err, errNoExactContextArtifact) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return codexDeliveryEvidenceWithContext(path, i.CodexSessionID, fence.RolloutOffset, notBefore,
+		&codexCutContext{open: fence.TurnOpen, promptSeen: fence.PromptSeen})
 }

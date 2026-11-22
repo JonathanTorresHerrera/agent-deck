@@ -395,6 +395,7 @@ var notSentDeliveries = map[string]bool{
 	deliveryTargetBusy:        true,
 	deliveryComposerBlocked:   true,
 	deliveryAcceptanceRefused: true,
+	deliveryDialogBlocked:     true,
 }
 
 // classifyChild reads a `session send --json` result. Only a refusal that

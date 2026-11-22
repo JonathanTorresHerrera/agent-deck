@@ -15,6 +15,10 @@ import (
 // supplies the matching exclusion across separate agent-deck processes.
 var codexAcceptanceGates sync.Map // map[codex session id]chan struct{}
 
+// ErrCodexAcceptanceLockTimeout reports that another send held the Codex
+// acceptance lock for the whole bounded wait. Nothing was typed.
+var ErrCodexAcceptanceLockTimeout = errors.New("Codex acceptance lock timed out")
+
 // CodexAcceptanceLock protects one Codex session's fence-to-generation
 // acceptance window. Release is idempotent.
 type CodexAcceptanceLock struct {
@@ -82,7 +86,7 @@ func AcquireCodexAcceptanceLock(codexSessionID string, timeout time.Duration) (*
 		if remaining <= 0 {
 			_ = f.Close()
 			gate <- struct{}{}
-			return nil, fmt.Errorf("Codex acceptance lock timed out after %s", timeout)
+			return nil, fmt.Errorf("%w after %s", ErrCodexAcceptanceLockTimeout, timeout)
 		}
 		delay := 50 * time.Millisecond
 		if remaining < delay {
@@ -95,7 +99,7 @@ func AcquireCodexAcceptanceLock(codexSessionID string, timeout time.Duration) (*
 func takeCodexAcceptanceGate(gate chan struct{}, deadline time.Time) error {
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
-		return fmt.Errorf("Codex acceptance lock timed out")
+		return ErrCodexAcceptanceLockTimeout
 	}
 	timer := time.NewTimer(remaining)
 	defer timer.Stop()
@@ -103,7 +107,7 @@ func takeCodexAcceptanceGate(gate chan struct{}, deadline time.Time) error {
 	case <-gate:
 		return nil
 	case <-timer.C:
-		return fmt.Errorf("Codex acceptance lock timed out")
+		return ErrCodexAcceptanceLockTimeout
 	}
 }
 
