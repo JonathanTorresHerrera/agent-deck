@@ -207,3 +207,39 @@ func TestCodexGuardClearsItsOwnMarkerWhenADialogBlockedTheSend(t *testing.T) {
 	}
 	again.Release()
 }
+
+// Review finding (codex escalation pass, 2026-11-22): a failed capture used to
+// read as "no modal, no turn" and let executeSend type. While the update
+// prompt is up that Enter would choose Update now, so the gate fails closed.
+func TestExecuteSendRefusesWhenTheCodexPaneCannotBeRead(t *testing.T) {
+	unreadable := errors.New("capture-pane failed")
+	mock := &mockSendRetryTarget{
+		panes:    []string{"", "", "", gateIdlePane},
+		paneErrs: []error{unreadable, unreadable, unreadable},
+		statuses: []string{"waiting"},
+	}
+	tun := noWaitSendTuning()
+	tun.codexLastMoment = true
+	res, err := executeSend(mock, "codex", "synthetic message", true, tun)
+	if err == nil || res.delivery != deliveryComposerBlocked || res.reasonCode != reasonPaneUnreadable {
+		t.Fatalf("res=%+v err=%v, want composer_blocked/pane_unreadable", res, err)
+	}
+	if mock.sendKeysCalls != 0 || mock.sendEnterCalls != 0 || mock.sendChunkedCalls != 0 {
+		t.Fatalf("typed into an unreadable pane: keys=%d enter=%d chunked=%d", mock.sendKeysCalls, mock.sendEnterCalls, mock.sendChunkedCalls)
+	}
+}
+
+func TestExecuteSendToleratesOneTransientCaptureFailure(t *testing.T) {
+	mock := &mockSendRetryTarget{
+		panes:    []string{"", gateIdlePane},
+		paneErrs: []error{errors.New("transient")},
+		statuses: []string{"waiting"},
+	}
+	tun := noWaitSendTuning()
+	tun.codexLastMoment = true
+	tun.retry.maxRetries, tun.retry.checkDelay = 1, time.Millisecond
+	res, _ := executeSend(mock, "codex", "synthetic message", true, tun)
+	if res.delivery == deliveryComposerBlocked || mock.sendKeysCalls != 1 {
+		t.Fatalf("a pane readable on the second try was refused: res=%+v keys=%d", res, mock.sendKeysCalls)
+	}
+}

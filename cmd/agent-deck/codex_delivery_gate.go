@@ -249,11 +249,39 @@ func waitForCodexDeliverable(inst *session.Instance, target codexKeyTarget, budg
 	}
 }
 
+// reasonPaneUnreadable: the Codex pane could not be captured right before
+// typing, so composer safety was not established (delivery composer_blocked).
+const reasonPaneUnreadable = "pane_unreadable"
+
+// codexLastMomentCaptureAttempts bounds the re-reads of a pane whose capture
+// failed before the gate gives up and refuses.
+const codexLastMomentCaptureAttempts = 3
+
+// readCodexPaneSettled reads the pane, retrying a failed capture briefly. A
+// pane that still cannot be read is reported captured=false.
+func readCodexPaneSettled(target paneCapturer) codexPaneState {
+	var pane codexPaneState
+	for attempt := 0; attempt < codexLastMomentCaptureAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+		if pane = readCodexPane(target); pane.captured {
+			return pane
+		}
+	}
+	return pane
+}
+
 // codexLastMomentGate is the check executeSend makes right before typing,
 // under the per-target send lock: a modal or a live status line on the pane
-// refuses with nothing typed.
+// refuses with nothing typed. It fails CLOSED: a pane that cannot be read
+// may be showing the update prompt, where the submitting Enter would choose
+// "Update now", so an unreadable pane refuses too.
 func codexLastMomentGate(target paneCapturer) (delivery, reasonCode string, err error) {
-	pane := readCodexPane(target)
+	pane := readCodexPaneSettled(target)
+	if !pane.captured {
+		return deliveryComposerBlocked, reasonPaneUnreadable, fmt.Errorf("the Codex pane could not be read right before typing; nothing was typed")
+	}
 	if pane.dialog != nil {
 		return deliveryDialogBlocked, pane.dialog.Kind, fmt.Errorf("a Codex dialog appeared before typing (%s); nothing was typed", pane.dialog.Line)
 	}

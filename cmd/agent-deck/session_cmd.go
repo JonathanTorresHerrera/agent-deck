@@ -3326,6 +3326,8 @@ func handleSessionSend(profile string, args []string) {
 			if *queueWorker {
 				budget = min(budget, codexQueueWorkerBusyWait)
 			}
+			// The wait only spends the budget; the post-lock gate below makes the
+			// decision, so a target still busy when the budget runs out refuses there.
 			_ = waitForCodexDeliverable(inst, tmuxSess, budget, codexBusyPollInterval)
 		}
 		guardErr := hydrateLegacyCodexIdentity(inst, instances, storage)
@@ -3370,8 +3372,15 @@ func handleSessionSend(profile string, args []string) {
 		}
 	} else if *draft && session.IsCodexCompatible(inst.Tool) {
 		// A draft types text without Enter, but a Codex modal still takes the
-		// keys as answers. Refuse rather than type into one.
-		if pane := readCodexPane(tmuxSess); pane.dialog != nil {
+		// keys as answers ("1" picks "Update now"). Refuse rather than type
+		// into one, and fail closed when the pane cannot be read at all.
+		pane := readCodexPaneSettled(tmuxSess)
+		switch {
+		case !pane.captured:
+			out.ErrorWithData(fmt.Sprintf("draft not typed into '%s': the Codex pane could not be read", inst.Title), ErrCodeDeliveryFailed,
+				map[string]interface{}{"delivery": deliveryComposerBlocked, "reason_code": reasonPaneUnreadable, "session_id": inst.ID, "session_title": inst.Title})
+			os.Exit(1)
+		case pane.dialog != nil:
 			out.ErrorWithData(fmt.Sprintf("draft not typed into '%s': a Codex dialog holds the pane (%s)", inst.Title, pane.dialog.Line), ErrCodeDeliveryFailed,
 				map[string]interface{}{"delivery": deliveryDialogBlocked, "reason_code": pane.dialog.Kind, "session_id": inst.ID, "session_title": inst.Title})
 			os.Exit(1)
