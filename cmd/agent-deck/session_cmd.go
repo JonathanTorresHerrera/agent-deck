@@ -3496,6 +3496,10 @@ func handleSessionSend(profile string, args []string) {
 	// #2033: give the verification loop the hook-driven busy signal so the
 	// Ctrl+C-and-resend recovery can tell a queued message on a live turn
 	// from a message lost during TUI init. Same signal --defer-if-busy reads.
+	// WO-DECK-CODEX-DELIVERY-01: every Codex send, local or remote, takes a
+	// last look at the pane before typing (a modal or a live turn refuses
+	// with nothing typed), whether or not it holds the acceptance guard.
+	tun.codexLastMoment = session.IsCodexCompatible(inst.Tool)
 	tun.retry.targetBusyByHook = func() (bool, bool) {
 		return hookDrivenBusy(inst)
 	}
@@ -3518,7 +3522,6 @@ func handleSessionSend(profile string, args []string) {
 			}
 			return codexEvidence != nil
 		}
-		tun.codexLastMoment = true
 		if err := validateCodexAcceptanceFence(inst, acceptanceFence); err != nil {
 			acceptanceGuard.Release()
 			out.Error(fmt.Sprintf("cannot submit against changed Codex turn fence: %v", err), ErrCodeInvalidOperation)
