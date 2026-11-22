@@ -16,8 +16,11 @@ import (
 )
 
 const (
-	codexSubmissionMarkerVersion = 1
-	codexSubmissionMarkerMaxSize = 8 << 10
+	// Version 2 (WO-DECK-CODEX-DELIVERY-01) adds rollout_offset. Version 1
+	// markers written by earlier builds stay readable and reconcilable.
+	codexSubmissionMarkerVersionV1 = 1
+	codexSubmissionMarkerVersion   = 2
+	codexSubmissionMarkerMaxSize   = 8 << 10
 
 	CodexSubmissionPhasePrepared  = "prepared"
 	CodexSubmissionPhaseSubmitted = "submitted"
@@ -36,12 +39,18 @@ type CodexSubmissionMarker struct {
 	Phase               string    `json:"phase"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
+	// RolloutOffset (version 2) is the exact rollout's length, at a line
+	// boundary, when the fence was captured; 0 when no rollout existed yet.
+	// Delivery evidence for this attempt is searched only after it. It is a
+	// byte count, so the marker stays content-free. Absent on version 1.
+	RolloutOffset *int64 `json:"rollout_offset,omitempty"`
 }
 
 // PrepareCodexSubmissionMarker durably publishes an unresolved attempt before
 // any bytes are sent to the pane. The caller must hold the matching acceptance
-// lock from before reconciliation until this write completes.
-func PrepareCodexSubmissionMarker(instanceID, codexSessionID, priorGeneration string, now time.Time) (*CodexSubmissionMarker, error) {
+// lock from before reconciliation until this write completes. rolloutOffset is
+// the fence's rollout length (CodexTurnState.RolloutOffset).
+func PrepareCodexSubmissionMarker(instanceID, codexSessionID, priorGeneration string, rolloutOffset int64, now time.Time) (*CodexSubmissionMarker, error) {
 	instanceID = strings.TrimSpace(instanceID)
 	codexSessionID = strings.TrimSpace(codexSessionID)
 	if instanceID == "" || len(instanceID) > 512 {
@@ -52,6 +61,9 @@ func PrepareCodexSubmissionMarker(instanceID, codexSessionID, priorGeneration st
 	}
 	if err := validateCodexMarkerGeneration(codexSessionID, priorGeneration, true); err != nil {
 		return nil, err
+	}
+	if rolloutOffset < 0 {
+		return nil, fmt.Errorf("Codex submission marker: invalid rollout offset")
 	}
 	attemptID, err := newCodexSubmissionAttemptID()
 	if err != nil {
@@ -70,6 +82,7 @@ func PrepareCodexSubmissionMarker(instanceID, codexSessionID, priorGeneration st
 		Phase:               CodexSubmissionPhasePrepared,
 		CreatedAt:           now,
 		UpdatedAt:           now,
+		RolloutOffset:       &rolloutOffset,
 	}
 	if err := writeCodexSubmissionMarker(marker, true); err != nil {
 		return nil, err
@@ -98,6 +111,10 @@ func (m *CodexSubmissionMarker) updatePhase(phase string, now time.Time) error {
 		now = time.Now()
 	}
 	next := *m
+	if m.RolloutOffset != nil {
+		offset := *m.RolloutOffset
+		next.RolloutOffset = &offset
+	}
 	next.Phase = phase
 	next.UpdatedAt = now.UTC()
 	if err := writeCodexSubmissionMarker(&next, false); err != nil {
@@ -107,35 +124,108 @@ func (m *CodexSubmissionMarker) updatePhase(phase string, now time.Time) error {
 	return nil
 }
 
-// ReconcileCodexSubmissionMarker resolves a crashed or completed prior sender
-// while the matching acceptance lock is held. A different exact generation is
-// assigned to that prior attempt and makes its marker safe to remove. With no
-// new generation, delivery remains unknowable and all later sends fail closed.
+// ErrUnresolvedCodexSubmission marks an earlier attempt whose delivery the
+// exact rollout cannot prove: a later send would risk a double submission.
+var ErrUnresolvedCodexSubmission = errors.New("unresolved Codex submission")
+
+// ErrCodexMarkerOwnerMismatch marks a marker that belongs to another
+// instance or thread than the sender's.
+var ErrCodexMarkerOwnerMismatch = errors.New("Codex submission marker ownership does not match this instance")
+
+// CodexDeliveryEvidenceFunc searches the exact rollout for proof that an
+// attempt cut at (cutOffset, notBefore) reached Codex; cutOffset < 0 means
+// the cut is unknown (a version 1 marker). nil evidence means no proof.
+type CodexDeliveryEvidenceFunc func(cutOffset int64, notBefore time.Time) (*CodexDeliveryEvidence, error)
+
+// CodexMarkerResolution reports how an earlier attempt's marker was resolved.
+type CodexMarkerResolution struct {
+	AttemptID  string                 `json:"attempt_id"`
+	Phase      string                 `json:"phase"`
+	Evidence   *CodexDeliveryEvidence `json:"evidence"`
+	ArchivedTo string                 `json:"archived_to"`
+}
+
+// ReconcileCodexSubmissionMarker is ReconcileCodexSubmissionMarkerWithEvidence
+// without rollout evidence: only a changed exact generation resolves.
 func ReconcileCodexSubmissionMarker(instanceID, codexSessionID, currentGeneration string) (string, error) {
-	marker, found, err := readCodexSubmissionMarker(codexSessionID)
-	if err != nil || !found {
+	resolution, err := ReconcileCodexSubmissionMarkerWithEvidence(instanceID, codexSessionID, currentGeneration, nil, time.Now())
+	if err != nil || resolution == nil {
 		return "", err
 	}
-	if marker.InstanceID != strings.TrimSpace(instanceID) || marker.CodexSessionID != strings.TrimSpace(codexSessionID) {
-		return "", fmt.Errorf("Codex submission marker ownership does not match this instance")
-	}
-	if currentGeneration == marker.PriorTurnGeneration {
-		path, pathErr := codexSubmissionMarkerPath(codexSessionID)
-		if pathErr != nil {
-			return "", pathErr
-		}
-		return "", fmt.Errorf(
-			"unresolved Codex submission %s at %s: no newer rollout generation is durable; inspect the exact Codex rollout and target pane, then manually remove this marker only if no turn was submitted; refusing a second send",
-			marker.AttemptID, path,
-		)
-	}
-	if err := validateCodexMarkerGeneration(marker.CodexSessionID, currentGeneration, false); err != nil {
-		return "", fmt.Errorf("cannot reconcile Codex submission marker: %w", err)
-	}
-	if err := ClearCodexSubmissionMarker(marker); err != nil {
-		return "", err
+	if resolution.Evidence != nil && resolution.Evidence.TurnGeneration != "" {
+		return resolution.Evidence.TurnGeneration, nil
 	}
 	return currentGeneration, nil
+}
+
+// ReconcileCodexSubmissionMarkerWithEvidence resolves an earlier sender's
+// attempt (crashed, or a non-wait send that left its marker) while the
+// matching acceptance lock is held. The attempt is resolved by:
+//
+//   - a changed exact generation, when the marker recorded a real prior
+//     generation (a "" prior can be the old 8 MiB scan window's false
+//     "no turn", so it never resolves this way); or
+//   - delivery evidence in the exact rollout after the attempt's cut: a turn
+//     that started after it, or input folded into a running turn
+//     (WO-DECK-CODEX-DELIVERY-01: Codex 0.161 folds mid-turn input and
+//     starts no new turn, which used to wedge every later send).
+//
+// A resolved marker is ARCHIVED (moved, never deleted) with a content-free
+// manifest line naming the evidence. Without proof the send fails closed
+// with ErrUnresolvedCodexSubmission: delivery is unknowable and a second
+// send could double-submit.
+//
+// Safety: a false positive (evidence that was not this attempt's input)
+// unblocks the next send while this attempt's own outcome stays what its
+// sender already reported (ambiguous). It can lose this attempt's text; it
+// can never type it twice.
+func ReconcileCodexSubmissionMarkerWithEvidence(
+	instanceID, codexSessionID, currentGeneration string,
+	evidence CodexDeliveryEvidenceFunc,
+	now time.Time,
+) (*CodexMarkerResolution, error) {
+	marker, found, err := readCodexSubmissionMarker(codexSessionID)
+	if err != nil || !found {
+		return nil, err
+	}
+	if marker.InstanceID != strings.TrimSpace(instanceID) || marker.CodexSessionID != strings.TrimSpace(codexSessionID) {
+		return nil, ErrCodexMarkerOwnerMismatch
+	}
+	path, err := codexSubmissionMarkerPath(codexSessionID)
+	if err != nil {
+		return nil, err
+	}
+	var proof *CodexDeliveryEvidence
+	if marker.PriorTurnGeneration != "" && currentGeneration != "" && currentGeneration != marker.PriorTurnGeneration {
+		if err := validateCodexMarkerGeneration(marker.CodexSessionID, currentGeneration, false); err != nil {
+			return nil, fmt.Errorf("cannot reconcile Codex submission marker: %w", err)
+		}
+		proof = &CodexDeliveryEvidence{Kind: CodexEvidenceNewTurn, Basis: CodexEvidenceBasisGeneration, TurnGeneration: currentGeneration}
+	} else if evidence != nil {
+		cut := int64(-1)
+		if marker.RolloutOffset != nil {
+			cut = *marker.RolloutOffset
+		}
+		proof, err = evidence(cut, marker.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("%w %s at %s: the exact rollout could not be read for delivery evidence (%v); refusing a second send",
+				ErrUnresolvedCodexSubmission, marker.AttemptID, path, err)
+		}
+	}
+	if proof == nil {
+		return nil, fmt.Errorf(
+			"%w %s at %s (%s since %s): no turn started and no input landed after it in the exact Codex rollout; refusing a second send. Run `agent-deck codex-markers` to inspect it (dry run); it archives a marker only when its delivery is proven or its session is gone",
+			ErrUnresolvedCodexSubmission, marker.AttemptID, path, marker.Phase, marker.CreatedAt.UTC().Format(time.RFC3339),
+		)
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	archived, err := archiveCodexSubmissionMarker(marker, "reconciled-"+now.UTC().Format("20060102"), "reconcile", proof, now)
+	if err != nil {
+		return nil, err
+	}
+	return &CodexMarkerResolution{AttemptID: marker.AttemptID, Phase: marker.Phase, Evidence: proof, ArchivedTo: archived}, nil
 }
 
 // ClearCodexSubmissionMarker removes only the exact attempt supplied by the
@@ -314,7 +404,19 @@ func writeCodexSubmissionMarker(marker *CodexSubmissionMarker, create bool) erro
 }
 
 func validateCodexSubmissionMarker(marker *CodexSubmissionMarker) error {
-	if marker == nil || marker.Version != codexSubmissionMarkerVersion {
+	if marker == nil {
+		return fmt.Errorf("unsupported Codex submission marker version")
+	}
+	switch marker.Version {
+	case codexSubmissionMarkerVersionV1:
+		if marker.RolloutOffset != nil {
+			return fmt.Errorf("invalid Codex submission marker: version 1 carries no rollout offset")
+		}
+	case codexSubmissionMarkerVersion:
+		if marker.RolloutOffset == nil || *marker.RolloutOffset < 0 {
+			return fmt.Errorf("invalid Codex submission marker rollout offset")
+		}
+	default:
 		return fmt.Errorf("unsupported Codex submission marker version")
 	}
 	if strings.TrimSpace(marker.InstanceID) == "" || marker.InstanceID != strings.TrimSpace(marker.InstanceID) || len(marker.InstanceID) > 512 {

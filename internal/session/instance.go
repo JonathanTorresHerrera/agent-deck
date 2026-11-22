@@ -8309,80 +8309,17 @@ func (i *Instance) codexRolloutTail() ([]string, error) {
 	return TranscriptTailLines(path, 50)
 }
 
-// Codex generation discovery expands backward by bytes rather than limiting
-// the number of records emitted after a turn starts. Most starts resolve from
-// the first small read; the maximum prevents an unresolved submission from
-// causing an unbounded historical read.
-const (
-	codexTurnGenerationInitialScanBytes = int64(64 << 10)
-	codexTurnGenerationScanMaxBytes     = int64(8 << 20)
-)
-
+// latestCodexTurnIDFromRollout returns the newest turn start in the rollout.
+// The backward scan has no fixed window: one Codex turn can write tens of
+// megabytes, and the old 8 MiB cap reported such a session as "no turn",
+// which wedged every later send behind its unresolved marker
+// (WO-DECK-CODEX-DELIVERY-01). See codex_rollout_scan.go.
 func latestCodexTurnIDFromRollout(path string) (string, error) {
-	f, err := os.Open(path) // #nosec G304 -- codexRolloutPath resolves one exact, non-symlink rollout
+	scan, err := scanCodexRolloutFile(path)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	size := info.Size()
-	if size == 0 {
-		return "", nil
-	}
-	scanBytes := min(size, codexTurnGenerationInitialScanBytes)
-	for {
-		offset := size - scanBytes
-		data := make([]byte, int(scanBytes))
-		if _, err := f.ReadAt(data, offset); err != nil {
-			return "", err
-		}
-
-		// When the byte window lands mid-record, discard that incomplete
-		// leading fragment. If it lands exactly after a newline, the first
-		// record is whole and remains eligible.
-		if offset > 0 {
-			var previous [1]byte
-			if _, err := f.ReadAt(previous[:], offset-1); err != nil {
-				return "", err
-			}
-			if previous[0] != '\n' {
-				newline := bytes.IndexByte(data, '\n')
-				if newline < 0 {
-					data = nil
-				} else {
-					data = data[newline+1:]
-				}
-			}
-		}
-
-		for end := len(data); end > 0; {
-			newline := bytes.LastIndexByte(data[:end], '\n')
-			line := bytes.TrimSpace(data[newline+1 : end])
-			end = newline
-			if newline < 0 {
-				end = 0
-			}
-			if len(line) == 0 {
-				continue
-			}
-			var record codexRolloutRecord
-			if json.Unmarshal(line, &record) != nil || record.Type != "event_msg" ||
-				(record.Payload.Type != "task_started" && record.Payload.Type != "turn_started") ||
-				record.Payload.TurnID == "" {
-				continue
-			}
-			return record.Payload.TurnID, nil
-		}
-
-		if offset == 0 || scanBytes == codexTurnGenerationScanMaxBytes {
-			return "", nil
-		}
-		scanBytes = min(size, min(scanBytes*2, codexTurnGenerationScanMaxBytes))
-	}
+	return scan.TurnID, nil
 }
 
 func (i *Instance) getCodexLastResponse() (*ResponseOutput, error) {
@@ -8424,18 +8361,11 @@ func parseCodexLastAssistantMessage(lines []string, sessionID string) (*Response
 // rollout for (fresh composer, no turn started) has no turn generation yet, so
 // it reports "" without error, like an empty rollout.
 func (i *Instance) LatestCodexTurnGeneration() (string, error) {
-	path, err := i.codexRolloutPath()
-	if errors.Is(err, errNoExactContextArtifact) && i.LiveCodexThreadID() == i.CodexSessionID {
-		return "", nil
-	}
+	state, err := i.CodexRolloutTurnState()
 	if err != nil {
 		return "", err
 	}
-	turnID, err := latestCodexTurnIDFromRollout(path)
-	if err != nil || turnID == "" {
-		return "", err
-	}
-	return i.CodexSessionID + ":" + turnID, nil
+	return state.Generation, nil
 }
 
 // GetLastResponseBestEffortChecked is the collision-aware variant of
