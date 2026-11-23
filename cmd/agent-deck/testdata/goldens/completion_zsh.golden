@@ -63,7 +63,7 @@ _agent_deck() {
         ;;
     session)
         if (( CURRENT == start + 1 )); then
-            subs=(start stop remove cleanup prune archive unarchive restart revive fork handoff attach focus show accept-trust viewers current primer set-parent unset-parent update set-transition-notify set-title-lock set switch-account move send approve send-keys output children search)
+            subs=(start stop remove cleanup prune archive unarchive restart revive fork handoff attach focus show accept-trust skip-codex-update viewers current primer set-parent unset-parent update set-transition-notify set-title-lock set switch-account move send approve send-keys output children search)
             compadd -a subs
             return
         fi
@@ -332,6 +332,7 @@ _agent_deck() {
     session:set-title-lock:0) kind=sessions ;;
     session:set-transition-notify:0) kind=sessions ;;
     session:show:0) kind=sessions ;;
+    session:skip-codex-update:0) kind=sessions ;;
     session:start:0) kind=sessions ;;
     session:stop:0) kind=sessions ;;
     session:switch-account:0) kind=sessions ;;
