@@ -57,7 +57,10 @@ import (
 type codexThreadMeta struct {
 	ThreadSource   string
 	ParentThreadID string
-	valid          bool
+	// Exec: session_meta source "exec", a `codex exec` run rather than an
+	// interactive conversation.
+	Exec  bool
+	valid bool
 }
 
 // codexThreadMetaCache memoizes session_meta head reads. A thread's origin
@@ -163,6 +166,8 @@ func readCodexRolloutThreadMeta(path string) codexThreadMeta {
 	if meta.ParentThreadID != "" || bytes.Contains(head.Payload.Source, []byte(`"subagent"`)) {
 		meta.ThreadSource = "subagent"
 	}
+	var source string
+	meta.Exec = json.Unmarshal(head.Payload.Source, &source) == nil && source == "exec"
 	return meta
 }
 
@@ -212,9 +217,26 @@ func CodexSubagentThread(threadID, codexHome string) bool {
 	return ok && meta.ThreadSource == "subagent"
 }
 
+// CodexInteractiveThread reports whether threadID has a flushed rollout under
+// codexHome that is an interactive conversation: not a subagent thread and
+// not a `codex exec` run. A `codex exec` started inside a pane inherits the
+// pane's environment and fires the same notify, but its thread is not the
+// pane's conversation. A thread with no rollout yet is not known to be
+// interactive, so it reports false.
+func CodexInteractiveThread(threadID, codexHome string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	meta, ok := codexThreadMetaForSession(threadID, codexHome)
+	return ok && !meta.Exec && meta.ThreadSource != "subagent"
+}
+
 // codexHookFromForeignThread reports whether a hook status record belongs to a
-// Codex thread other than the one this pane talks to: a subagent thread, or an
-// ephemeral helper whose turn ended without a rollout. Such a record must not
+// Codex thread other than the one this pane talks to: a subagent thread, an
+// ephemeral helper whose turn ended without a rollout, or, for an instance
+// that is already bound, any other thread the notify writer had no pane or
+// binding evidence for (codex_thread_evidence.go). Such a record must not
 // drive this instance's status, transition candidates or done signals. Hook
 // files written before the notify writer gained these gates still carry them.
 func (i *Instance) codexHookFromForeignThread(hs *HookStatus) bool {
@@ -224,6 +246,9 @@ func (i *Instance) codexHookFromForeignThread(hs *HookStatus) bool {
 	sid := strings.TrimSpace(hs.SessionID)
 	if sid == "" || sid == i.CodexSessionID {
 		return false
+	}
+	if !i.codexHookMayMoveBinding(sid, hs.CodexThreadEvidence) {
+		return true
 	}
 	home := i.getCodexHomeDir()
 	return CodexSubagentThread(sid, home) || CodexUnbackedTurnEnd(sid, hs.Event, home)

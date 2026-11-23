@@ -35,8 +35,25 @@ type codexNotifyPayload struct {
 	ThreadIDDash string `json:"thread-id"`
 	TurnID       string `json:"turn_id"`
 	TurnIDDash   string `json:"turn-id"`
+	Cwd          string `json:"cwd"`
 	Params       map[string]json.RawMessage
 	Payload      map[string]json.RawMessage
+}
+
+// parseCodexNotifyCwd returns the working directory a notify payload reports
+// for its thread, or "" when it carries none.
+func parseCodexNotifyCwd(data []byte) string {
+	var payload codexNotifyPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	if cwd := strings.TrimSpace(payload.Cwd); cwd != "" {
+		return cwd
+	}
+	if cwd := decodeStringField(payload.Params, "cwd"); cwd != "" {
+		return cwd
+	}
+	return decodeStringField(payload.Payload, "cwd")
 }
 
 func mapCodexNotifyToStatus(event string) string {
@@ -183,8 +200,10 @@ func handleCodexNotify() {
 	event := ""
 	sessionID := ""
 	turnID := ""
+	cwd := ""
 	if len(data) > 0 {
 		event, sessionID, turnID = parseCodexNotifyPayload(data)
+		cwd = parseCodexNotifyCwd(data)
 		if event == "" {
 			trimmed := strings.TrimSpace(string(data))
 			if !strings.HasPrefix(trimmed, "{") {
@@ -200,6 +219,7 @@ func handleCodexNotify() {
 		return
 	}
 
+	threadFromPayload := sessionID != ""
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(os.Getenv("CODEX_SESSION_ID"))
 	}
@@ -210,12 +230,26 @@ func handleCodexNotify() {
 	// Subagent threads (thread_source=subagent) do write a rollout and fire
 	// agent-turn-complete each time a spawned child finishes, while the parent
 	// turn keeps working; their events are not the pane's either.
-	if home := codexNotifyHome(); home != "" &&
+	home := codexNotifyHome()
+	if home != "" &&
 		(session.CodexUnbackedTurnEnd(sessionID, event, home) || session.CodexSubagentThread(sessionID, home)) {
 		return
 	}
 
-	writeCodexHookStatus(instanceID, status, sessionID, event, turnID)
+	// The environment names the session whose TUI started this notify's
+	// parent, which for Codex's shared app-server daemon is not the session
+	// running the thread (codex_notify_route.go).
+	source := codexNotifySourceOf()
+	route := routeCodexNotify(instanceID, sessionID, threadFromPayload, cwd, source, home)
+	payloadThread := ""
+	if threadFromPayload {
+		payloadThread = sessionID
+	}
+	logCodexNotifyRoute(instanceID, payloadThread, event, source, route)
+	if route.instanceID == "" {
+		return
+	}
+	writeCodexHookRecord(route.instanceID, route.instanceID == instanceID, status, sessionID, event, turnID, route.evidence)
 }
 
 // codexNotifyHome is the Codex home of the Codex process that spawned this
@@ -244,6 +278,19 @@ func codexTurnEdge(event string) (started, completed bool) {
 // lock. Notify invocations are separate processes and can overlap; serializing
 // the read/modify/write makes the generation proof deterministic.
 func writeCodexHookStatus(instanceID, status, sessionID, event string, turnIDs ...string) {
+	turnID := ""
+	if len(turnIDs) > 0 {
+		turnID = turnIDs[0]
+	}
+	writeCodexHookRecord(instanceID, true, status, sessionID, event, turnID, "")
+}
+
+// writeCodexHookRecord is writeCodexHookStatus for a routed notify. ownEnv
+// says instanceID is the instance the notify's environment names, the only
+// case in which the environment's hook generation applies. evidence is what
+// the writer knew about the thread (session.CodexThreadEvidence*); every
+// record states its own, so an earlier record's never carries over.
+func writeCodexHookRecord(instanceID string, ownEnv bool, status, sessionID, event, turnID, evidence string) {
 	if instanceID == "" || status == "" {
 		return
 	}
@@ -305,10 +352,7 @@ func writeCodexHookStatus(instanceID, status, sessionID, event string, turnIDs .
 		evidenceSessionID = session.ReadHookSessionAnchor(instanceID)
 	}
 	started, completed := codexTurnEdge(event)
-	turnID := ""
-	if len(turnIDs) > 0 {
-		turnID = strings.TrimSpace(turnIDs[0])
-	}
+	turnID = strings.TrimSpace(turnID)
 	if started {
 		prior.CodexCompletedGeneration = ""
 		prior.CodexCompletedSessionID = ""
@@ -347,9 +391,14 @@ func writeCodexHookStatus(instanceID, status, sessionID, event string, turnIDs .
 		prior.CodexCompletedSequence = prior.CodexStartedSequence
 	}
 	prior.Status, prior.SessionID, prior.Event = status, sessionID, event
+	prior.CodexThreadEvidence = strings.TrimSpace(evidence)
 	prior.Timestamp = time.Now().Unix()
 	prior.DoneStatus, prior.DoneSummary, prior.TranscriptPath, prior.Cwd = "", "", "", ""
-	writeHookStatusFile(instanceID, prior, false)
+	generation := ""
+	if ownEnv {
+		generation = strings.TrimSpace(os.Getenv("AGENTDECK_HOOK_GENERATION"))
+	}
+	writeHookStatusFileGeneration(instanceID, prior, false, generation)
 }
 
 func handleCodexHooks(args []string) {

@@ -149,6 +149,12 @@ type HookStatus struct {
 	HookGeneration           string
 	Sequence                 uint64
 	codexCompletionConsumed  bool
+	// CodexThreadEvidence is what the Codex notify writer knew about the
+	// record's thread when it filed the event under this instance:
+	// CodexThreadEvidencePane, CodexThreadEvidenceBinding, or empty. A bound
+	// instance moves to another thread only on evidence
+	// (codex_thread_evidence.go).
+	CodexThreadEvidence string
 	// DoneStatus/DoneSummary carry a worker-printed completion sentinel
 	// detected on the Stop edge (issue #1186). Empty for ordinary turns.
 	DoneStatus  string // "ok" or "fail" when a completion sentinel was seen
@@ -509,6 +515,7 @@ func (w *StatusFileWatcher) scanDirEntriesInto(out map[string]*HookStatus, dir s
 			CodexCompletedSessionID  string `json:"codex_completed_session_id"`
 			CodexStartedSequence     uint64 `json:"codex_started_sequence"`
 			CodexCompletedSequence   uint64 `json:"codex_completed_sequence"`
+			CodexThreadEvidence      string `json:"codex_thread_evidence"`
 			HookGeneration           string `json:"hook_generation"`
 			Sequence                 uint64 `json:"sequence"`
 		}
@@ -533,6 +540,7 @@ func (w *StatusFileWatcher) scanDirEntriesInto(out map[string]*HookStatus, dir s
 			CodexCompletedSessionID:  raw.CodexCompletedSessionID,
 			CodexStartedSequence:     raw.CodexStartedSequence,
 			CodexCompletedSequence:   raw.CodexCompletedSequence,
+			CodexThreadEvidence:      raw.CodexThreadEvidence,
 			HookGeneration:           raw.HookGeneration,
 			Sequence:                 raw.Sequence,
 		}
@@ -682,6 +690,7 @@ func (w *StatusFileWatcher) processFile(filePath string) {
 		CodexCompletedSessionID  string `json:"codex_completed_session_id"`
 		CodexStartedSequence     uint64 `json:"codex_started_sequence"`
 		CodexCompletedSequence   uint64 `json:"codex_completed_sequence"`
+		CodexThreadEvidence      string `json:"codex_thread_evidence"`
 		HookGeneration           string `json:"hook_generation"`
 		Sequence                 uint64 `json:"sequence"`
 	}
@@ -713,6 +722,7 @@ func (w *StatusFileWatcher) processFile(filePath string) {
 		CodexCompletedSessionID:  status.CodexCompletedSessionID,
 		CodexStartedSequence:     status.CodexStartedSequence,
 		CodexCompletedSequence:   status.CodexCompletedSequence,
+		CodexThreadEvidence:      status.CodexThreadEvidence,
 		HookGeneration:           status.HookGeneration,
 		Sequence:                 status.Sequence,
 	}

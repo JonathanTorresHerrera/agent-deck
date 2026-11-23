@@ -99,11 +99,14 @@ func TestRebindPersistsCodexSessionIDToDB(t *testing.T) {
 		t.Fatalf("pre-condition: DB codex_session_id = %q, want %q", got, oldID)
 	}
 
+	// A bound session moves only on evidence that the thread is its own:
+	// here the pane that ran it (a /new in the same pane).
 	inst.UpdateHookStatus(&HookStatus{
-		Status:    "running",
-		SessionID: newID,
-		Event:     "UserPromptSubmit",
-		UpdatedAt: time.Now(),
+		Status:              "running",
+		SessionID:           newID,
+		Event:               "UserPromptSubmit",
+		UpdatedAt:           time.Now(),
+		CodexThreadEvidence: CodexThreadEvidencePane,
 	})
 
 	// Post-condition (in-memory) — the existing behavior pre-fix.
@@ -255,11 +258,14 @@ func TestCodexRebindPreservesUnrelatedToolDataKeys(t *testing.T) {
 	}
 
 	inst.CodexSessionID = oldID
+	// A bound session moves only on evidence that the thread is its own:
+	// here the pane that ran it (a /new in the same pane).
 	inst.UpdateHookStatus(&HookStatus{
-		Status:    "running",
-		SessionID: newID,
-		Event:     "UserPromptSubmit",
-		UpdatedAt: time.Now(),
+		Status:              "running",
+		SessionID:           newID,
+		Event:               "UserPromptSubmit",
+		UpdatedAt:           time.Now(),
+		CodexThreadEvidence: CodexThreadEvidencePane,
 	})
 
 	rows, err := db.LoadInstances()

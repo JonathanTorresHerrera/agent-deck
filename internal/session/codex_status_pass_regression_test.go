@@ -124,6 +124,9 @@ func TestStatusPassRefreshDoesNotBlockReadersOrRotation(t *testing.T) {
 			known.hookStatus = "running"
 			known.hookLastUpdate = time.Now()
 			known.hookSessionID = "rotated-from-hook"
+			// A bound session rotates only on a record the notify writer had
+			// pane evidence for (codex_thread_evidence.go).
+			known.hookCodexThreadEvidence = CodexThreadEvidencePane
 			updated := make(chan struct{})
 			var knownErr error
 			go func() { knownErr = pass.UpdateStatus(known); close(updated) }()
