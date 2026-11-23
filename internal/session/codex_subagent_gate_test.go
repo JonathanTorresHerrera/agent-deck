@@ -166,11 +166,13 @@ func TestCodexHookRebind_AllowsUserThread(t *testing.T) {
 	seedCodexRolloutWithMeta(t, codexHome, newSID, "user", "", false)
 
 	inst.CodexSessionID = oldSID
+	// The notify writer saw the pane run the new thread (/new in that pane).
 	inst.UpdateHookStatus(&HookStatus{
-		Status:    "running",
-		SessionID: newSID,
-		Event:     "agent-turn-complete",
-		UpdatedAt: time.Now(),
+		Status:              "running",
+		SessionID:           newSID,
+		Event:               "agent-turn-complete",
+		UpdatedAt:           time.Now(),
+		CodexThreadEvidence: CodexThreadEvidencePane,
 	})
 
 	if inst.CodexSessionID != newSID {
@@ -191,10 +193,11 @@ func TestCodexHookRebind_AllowsUnflushedCandidate(t *testing.T) {
 	// codex_title_thread_rebind_test.go).
 	inst.CodexSessionID = oldSID
 	inst.UpdateHookStatus(&HookStatus{
-		Status:    "waiting",
-		SessionID: newSID,
-		Event:     "thread.started",
-		UpdatedAt: time.Now(),
+		Status:              "waiting",
+		SessionID:           newSID,
+		Event:               "thread.started",
+		UpdatedAt:           time.Now(),
+		CodexThreadEvidence: CodexThreadEvidencePane,
 	})
 
 	if inst.CodexSessionID != newSID {

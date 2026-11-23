@@ -596,6 +596,7 @@ type Instance struct {
 	hookStatus                  string    // running, idle, waiting, dead (empty = no hook data)
 	hookEvent                   string    // Hook event name that caused the last status (e.g. "PermissionRequest")
 	hookSessionID               string    // Session ID from hook payload
+	hookCodexThreadEvidence     string    // codex_thread_evidence of the record hookSessionID came from
 	hookLastUpdate              time.Time // When hook status was last received
 	linkedClaudeSessionID       string    // Last Claude id confirmClaudeSessionLink wrote a session_links row for
 	codexStartedGeneration      string
@@ -6557,6 +6558,7 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 			i.hookEvent = hs.Event
 			i.hookLastUpdate = hs.UpdatedAt
 			i.hookSessionID = hs.SessionID
+			i.hookCodexThreadEvidence = hs.CodexThreadEvidence
 			// #1846: a disk-read hook sample is activity evidence too.
 			// Flushed by this function's persistLastActivity defer.
 			i.noteAgentActivityLocked(hs.UpdatedAt)
@@ -6576,12 +6578,16 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 	}
 
 	// Recheck cached evidence too: a rollout may acquire its subagent metadata
-	// after the hook was first read, or an older reader may have cached a
-	// foreign turn-end from a thread without a rollout.
+	// after the hook was first read, an older reader may have cached a
+	// foreign turn-end from a thread without a rollout, or the binding may
+	// have moved since the record was cached and the record carries no
+	// evidence that its thread is this session's (codex_thread_evidence.go).
 	if IsCodexCompatible(i.Tool) && i.hookSessionID != "" &&
-		(i.shouldRejectCodexSubagentRebind(i.hookSessionID) ||
+		(!i.codexHookMayMoveBinding(i.hookSessionID, i.hookCodexThreadEvidence) ||
+			i.shouldRejectCodexSubagentRebind(i.hookSessionID) ||
 			i.shouldRejectCodexUnbackedTurnEnd(i.hookSessionID, i.hookEvent)) {
 		i.hookStatus, i.hookEvent, i.hookSessionID = "", "", ""
+		i.hookCodexThreadEvidence = ""
 		i.hookLastUpdate = time.Time{}
 	}
 
@@ -6687,7 +6693,10 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 					i.markClaudeSessionIDVerified()
 				}
 			case IsCodexCompatible(i.Tool):
-				if i.hookSessionID != i.CodexSessionID {
+				// The recheck above already dropped a cached record that may
+				// not move a bound session; this keeps the rule local too.
+				if i.hookSessionID != i.CodexSessionID &&
+					i.codexHookMayMoveBinding(i.hookSessionID, i.hookCodexThreadEvidence) {
 					i.CodexSessionID = i.hookSessionID
 					i.recordCodexOwnership(i.CodexSessionID)
 					i.CodexDetectedAt = time.Now()
@@ -7363,6 +7372,16 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 				Source: hookSource, OldID: i.CodexSessionID, Candidate: sessionID,
 				HookEvent: status.Event, Reason: "candidate_turn_ended_without_rollout",
 			})
+			return
+		}
+		// Shared app-server daemon (codex_thread_evidence.go): a bound
+		// session moves to another thread only when the notify writer had
+		// pane or binding evidence for it. Anything else is another
+		// session's turn filed under this one's environment; its status is
+		// not this pane's either.
+		if !i.codexHookMayMoveBinding(sessionID, status.CodexThreadEvidence) {
+			restoreHook()
+			i.logCodexForeignHookReject(hookSource, sessionID, status)
 			return
 		}
 		i.bindCodexSessionFromHook(sessionID, status.Event)

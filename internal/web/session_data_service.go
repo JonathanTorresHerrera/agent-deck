@@ -411,6 +411,7 @@ type rawHookStatus struct {
 	CodexCompletedGeneration string `json:"codex_completed_generation"`
 	CodexStartedSessionID    string `json:"codex_started_session_id"`
 	CodexCompletedSessionID  string `json:"codex_completed_session_id"`
+	CodexThreadEvidence      string `json:"codex_thread_evidence"`
 }
 
 func defaultLoadHookStatuses() map[string]*session.HookStatus {
@@ -480,6 +481,7 @@ func defaultLoadHookStatuses() map[string]*session.HookStatus {
 			CodexCompletedGeneration: parsed.CodexCompletedGeneration,
 			CodexStartedSessionID:    parsed.CodexStartedSessionID,
 			CodexCompletedSessionID:  parsed.CodexCompletedSessionID,
+			CodexThreadEvidence:      parsed.CodexThreadEvidence,
 		}
 	}
 
