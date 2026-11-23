@@ -16,13 +16,16 @@ import (
 type SessionIDLifecycleEvent struct {
 	InstanceID string `json:"instance_id"`
 	Tool       string `json:"tool"`
-	Action     string `json:"action"` // bind | rebind | reject | scan_disabled
-	Source     string `json:"source"` // tmux_env | hook_payload | hook_anchor | disk_scan
+	Action     string `json:"action"` // bind | rebind | reject | scan_disabled | route | drop
+	Source     string `json:"source"` // tmux_env | hook_payload | hook_anchor | disk_scan | codex_notify_*
 	OldID      string `json:"old_id,omitempty"`
 	NewID      string `json:"new_id,omitempty"`
 	Candidate  string `json:"candidate,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	HookEvent  string `json:"hook_event,omitempty"`
+	// RoutedFrom names the instance a Codex notify's environment pointed at
+	// when the writer filed the event under InstanceID instead.
+	RoutedFrom string `json:"routed_from,omitempty"`
 	Timestamp  int64  `json:"ts"`
 }
 

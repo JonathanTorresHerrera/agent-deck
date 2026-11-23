@@ -79,6 +79,11 @@ type hookStatusFile struct {
 	HookGeneration           string `json:"hook_generation,omitempty"`
 	Sequence                 uint64 `json:"sequence,omitempty"`
 	InitialMessagePending    bool   `json:"initial_message_pending,omitempty"`
+	// CodexThreadEvidence is what the Codex notify writer knew about this
+	// record's thread when it chose the instance (see
+	// session.CodexThreadEvidencePane / CodexThreadEvidenceBinding). Readers
+	// move a bound session to another thread only on evidence.
+	CodexThreadEvidence string `json:"codex_thread_evidence,omitempty"`
 	// DoneStatus/DoneSummary carry a worker-printed completion sentinel
 	// detected on the Stop edge (issue #1186). omitempty so ordinary Stops
 	// (no sentinel) leave the fields absent, which the daemon reads as
@@ -423,8 +428,15 @@ func writeHookStatusWithScan(instanceID, status, sessionID, event, cwd string, s
 }
 
 func writeHookStatusFile(instanceID string, statusFile hookStatusFile, mutateAnchor bool) bool {
+	return writeHookStatusFileGeneration(instanceID, statusFile, mutateAnchor,
+		strings.TrimSpace(os.Getenv("AGENTDECK_HOOK_GENERATION")))
+}
+
+// writeHookStatusFileGeneration is writeHookStatusFile with the hook
+// generation passed in. A Codex notify filed under another instance than the
+// one its environment names must not present that environment's generation.
+func writeHookStatusFileGeneration(instanceID string, statusFile hookStatusFile, mutateAnchor bool, generation string) bool {
 	hooksDir := getHooksDir()
-	generation := strings.TrimSpace(os.Getenv("AGENTDECK_HOOK_GENERATION"))
 	if generation != "" {
 		lockPath := filepath.Join(hooksDir, filepath.Base(instanceID)+".lock")
 		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
