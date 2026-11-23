@@ -309,10 +309,10 @@ func performSend(
 		lock, err := session.AcquireSendLock(inst.ID, sendTargetLockWait)
 		if err != nil {
 			if errors.Is(err, session.ErrConfigLockBusy) {
-				return sendDeliveryResult{delivery: deliveryTargetBusy},
+				return sendDeliveryResult{delivery: deliveryTargetBusy, reasonCode: reasonSendLockHeld},
 					fmt.Errorf("target busy with another send (waited %s): %w", sendTargetLockWait, err)
 			}
-			return sendDeliveryResult{delivery: deliveryTargetBusy}, fmt.Errorf("send lock: %w", err)
+			return sendDeliveryResult{delivery: deliveryTargetBusy, reasonCode: reasonSendLockHeld}, fmt.Errorf("send lock: %w", err)
 		}
 		defer lock.Release()
 	}

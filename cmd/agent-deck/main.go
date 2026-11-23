@@ -610,6 +610,10 @@ func main() {
 		case "codex-hooks":
 			handleCodexHooks(args[1:])
 			return
+		case "codex-markers":
+			// WO-DECK-CODEX-DELIVERY-01: inspect/archive stale Codex submission markers.
+			handleCodexMarkers(args[1:])
+			return
 		case "gemini-hooks":
 			handleGeminiHooks(args[1:])
 			return
@@ -1506,7 +1510,7 @@ var commandRegistry = map[string]bool{
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
 	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "events": true, "daemon": true, "usage": true, "web": true, "config": true, "recall": true,
 	"uninstall": true, "migrate-paths": true, "hook-handler": true,
-	"codex-notify": true, "hooks": true, "codex-hooks": true, "gemini-hooks": true,
+	"codex-notify": true, "hooks": true, "codex-hooks": true, "codex-markers": true, "gemini-hooks": true,
 	"hermes-hooks": true, "cursor-hooks": true, "tmux-hooks": true, "pi-hooks": true, "deepseek": true, "notify-daemon": true,
 	"run-task": true, "inbox": true, "feedback": true, "telemetry": true,
 	"debug-dump": true, "version": true, "--version": true, "-v": true,

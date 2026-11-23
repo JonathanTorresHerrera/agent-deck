@@ -81,6 +81,8 @@ func handleSession(profile string, args []string) {
 		handleSessionShow(profile, args[1:])
 	case "accept-trust":
 		handleSessionAcceptTrust(profile, args[1:])
+	case "skip-codex-update":
+		handleSessionSkipCodexUpdate(profile, args[1:])
 	case "viewers":
 		handleSessionViewers(profile, args[1:])
 	case "current":
@@ -3309,6 +3311,25 @@ func handleSessionSend(profile string, args []string) {
 		// is provably unavailable (macapp-core-needs §3: right after the
 		// trust prompt there is no identity, or the stored id has no
 		// rollout), sends through the verified composer path instead.
+		// WO-DECK-CODEX-DELIVERY-01: never type into a running Codex turn.
+		// A readiness-waited send waits for the turn to end BEFORE taking the
+		// acceptance lock, so waiting never blocks another sender; --no-wait
+		// looks once after the lock below and refuses with nothing typed.
+		if !*noWait && inst.CodexRolloutIsResolvableLocally() {
+			budget := *timeout
+			if budget <= 0 {
+				budget = sessionSendDefaultTimeout
+			}
+			if *deferIfBusy && *deferTimeout > 0 {
+				budget = *deferTimeout
+			}
+			if *queueWorker {
+				budget = min(budget, codexQueueWorkerBusyWait)
+			}
+			// The wait only spends the budget; the post-lock gate below makes the
+			// decision, so a target still busy when the budget runs out refuses there.
+			_ = waitForCodexDeliverable(inst, tmuxSess, budget, codexBusyPollInterval)
+		}
 		guardErr := hydrateLegacyCodexIdentity(inst, instances, storage)
 		if guardErr == nil {
 			acceptanceGuard, guardErr = acquireCodexAcceptanceGuard(inst, codexAcceptanceLockWait(*timeout))
@@ -3320,8 +3341,48 @@ func handleSessionSend(profile string, args []string) {
 			acceptanceGuard = nil
 			fmt.Fprintf(os.Stderr, "Note: no Codex accepted-turn receipt yet (%v); sending through the composer (--codex-composer-fallback)\n", guardErr)
 		default:
+			// Nothing was typed. reason_code says why, so a caller can queue a
+			// transient refusal and report a stuck one (WO-DECK-CODEX-DELIVERY-01).
 			out.ErrorWithData(fmt.Sprintf("cannot establish exact Codex turn acceptance: %v", guardErr), ErrCodeInvalidOperation,
-				map[string]interface{}{"delivery": deliveryAcceptanceRefused})
+				map[string]interface{}{
+					"delivery":      deliveryAcceptanceRefused,
+					"reason_code":   codexAcceptanceReasonCode(guardErr),
+					"submitted":     false,
+					"session_id":    inst.ID,
+					"session_title": inst.Title,
+				})
+			os.Exit(1)
+		}
+		if acceptanceGuard != nil {
+			verdict := probeCodexDelivery(inst, tmuxSess, &acceptanceFence.state)
+			if verdict.dialog != nil && verdict.dialog.Kind == send.CodexDialogUpdatePrompt {
+				if _, skipped, _ := skipCodexUpdatePrompt(tmuxSess, codexUpdateSkipVerify); skipped {
+					verdict = probeCodexDelivery(inst, tmuxSess, &acceptanceFence.state)
+				}
+			}
+			if !verdict.deliverable() {
+				acceptanceGuard.Release()
+				delivery, reasonCode, refusal := codexVerdictRefusal(verdict, inst.Title)
+				extra := sendDeliveryResult{delivery: delivery, reasonCode: reasonCode}.jsonFields()
+				extra["session_id"] = inst.ID
+				extra["session_title"] = inst.Title
+				out.ErrorWithData(refusal, ErrCodeDeliveryFailed, extra)
+				os.Exit(1)
+			}
+		}
+	} else if *draft && session.IsCodexCompatible(inst.Tool) {
+		// A draft types text without Enter, but a Codex modal still takes the
+		// keys as answers ("1" picks "Update now"). Refuse rather than type
+		// into one, and fail closed when the pane cannot be read at all.
+		pane := readCodexPaneSettled(tmuxSess)
+		switch {
+		case !pane.captured:
+			out.ErrorWithData(fmt.Sprintf("draft not typed into '%s': the Codex pane could not be read", inst.Title), ErrCodeDeliveryFailed,
+				map[string]interface{}{"delivery": deliveryComposerBlocked, "reason_code": reasonPaneUnreadable, "session_id": inst.ID, "session_title": inst.Title})
+			os.Exit(1)
+		case pane.dialog != nil:
+			out.ErrorWithData(fmt.Sprintf("draft not typed into '%s': a Codex dialog holds the pane (%s)", inst.Title, pane.dialog.Line), ErrCodeDeliveryFailed,
+				map[string]interface{}{"delivery": deliveryDialogBlocked, "reason_code": pane.dialog.Kind, "session_id": inst.ID, "session_title": inst.Title})
 			os.Exit(1)
 		}
 	}
@@ -3446,6 +3507,10 @@ func handleSessionSend(profile string, args []string) {
 	// #2033: give the verification loop the hook-driven busy signal so the
 	// Ctrl+C-and-resend recovery can tell a queued message on a live turn
 	// from a message lost during TUI init. Same signal --defer-if-busy reads.
+	// WO-DECK-CODEX-DELIVERY-01: every Codex send, local or remote, takes a
+	// last look at the pane before typing (a modal or a live turn refuses
+	// with nothing typed), whether or not it holds the acceptance guard.
+	tun.codexLastMoment = session.IsCodexCompatible(inst.Tool)
 	tun.retry.targetBusyByHook = func() (bool, bool) {
 		return hookDrivenBusy(inst)
 	}
@@ -3456,10 +3521,18 @@ func handleSessionSend(profile string, args []string) {
 		turnQuery := session.TurnQuery{Path: turnPath, Prompt: message, Cursor: turnCursor}
 		tun.retry.turnAdvanced = func() bool { return session.TurnAdvanced(turnQuery) }
 	}
+	var codexEvidence *session.CodexDeliveryEvidence
 	if acceptanceGuard != nil {
-		// Codex's counterpart: a new turn in the exact rollout past the
-		// acceptance fence, the evidence the accepted-turn receipt rests on.
-		tun.retry.turnAdvanced = func() bool { return codexTurnAdvancedPastFence(inst, acceptanceFence) }
+		// Codex's counterpart: delivery evidence in the exact rollout past the
+		// acceptance fence. A new turn is what the accepted-turn receipt rests
+		// on; input folded into a turn that started in the race window is a
+		// delivery too (WO-DECK-CODEX-DELIVERY-01).
+		tun.retry.turnAdvanced = func() bool {
+			if codexEvidence == nil {
+				codexEvidence = codexEvidencePastFence(inst, acceptanceFence, acceptanceGuard.markerCreatedAt())
+			}
+			return codexEvidence != nil
+		}
 		if err := validateCodexAcceptanceFence(inst, acceptanceFence); err != nil {
 			acceptanceGuard.Release()
 			out.Error(fmt.Sprintf("cannot submit against changed Codex turn fence: %v", err), ErrCodeInvalidOperation)
@@ -3527,7 +3600,11 @@ func handleSessionSend(profile string, args []string) {
 			out.ErrorWithData(fmt.Sprintf("message not delivered to '%s': %v", inst.Title, sendErr), ErrCodeDeliveryFailed, extra)
 		case deliveryTargetBusy:
 			// Nothing was typed: another send held the target for the whole
-			// bounded wait. Retry once it finishes.
+			// bounded wait, or a Codex turn started just before typing. Retry
+			// once it finishes.
+			out.ErrorWithData(fmt.Sprintf("message not delivered to '%s': %v", inst.Title, sendErr), ErrCodeDeliveryFailed, extra)
+		case deliveryDialogBlocked:
+			// Nothing was typed: a Codex modal appeared just before typing.
 			out.ErrorWithData(fmt.Sprintf("message not delivered to '%s': %v", inst.Title, sendErr), ErrCodeDeliveryFailed, extra)
 		case deliverySocketWriteFailed:
 			// #2089: the write to the Claude messaging socket started and
@@ -3582,6 +3659,23 @@ func handleSessionSend(profile string, args []string) {
 		}
 		acceptanceGuard.Release()
 		acceptanceGuard = nil
+	}
+	if acceptanceGuard != nil && acceptedTurn == nil && !*wait {
+		// WO-DECK-CODEX-DELIVERY-01: a non-wait send used to leave every
+		// marker for the next sender to reconcile. When the exact rollout
+		// already proves this send landed (its turn started, or its input
+		// folded into the running turn), the send resolves its own attempt.
+		evidence := codexEvidence
+		if evidence == nil {
+			evidence = codexEvidencePastFence(inst, acceptanceFence, acceptanceGuard.markerCreatedAt())
+		}
+		if evidence != nil {
+			if err := acceptanceGuard.ResolveAccepted(); err == nil {
+				sendData["delivery_evidence"] = evidence.Kind
+				acceptanceGuard.Release()
+				acceptanceGuard = nil
+			}
+		}
 	}
 	if acceptanceGuard != nil && !retainCodexAcceptanceGuardForCompletion(*wait, acceptedTurn) {
 		// The unresolved marker survives this process. A later sender either
@@ -4206,6 +4300,9 @@ func deliveryConfirmation(delivery string) string {
 type sendDeliveryResult struct {
 	// delivery is one of the delivery* constants above.
 	delivery string
+	// reasonCode names why a nothing-typed refusal happened (reason* in
+	// codex_delivery_gate.go); reported as reason_code in --json.
+	reasonCode string
 	// note is the human wording for a deliveryDelivered outcome: which tool
 	// could not confirm, or within what window (send.UnconfirmedMessage).
 	note string
@@ -4254,6 +4351,10 @@ type codexAcceptanceFence struct {
 	codexSessionID      string
 	priorTurnGeneration string
 	available           bool
+	// state is the exact rollout at capture: open turn, prompt written, and
+	// the length delivery evidence for this send is searched after.
+	state      session.CodexTurnState
+	capturedAt time.Time
 }
 
 // codexAcceptedTurnReceipt is returned only after Codex submission is
@@ -4280,6 +4381,20 @@ type codexAcceptanceGuard struct {
 	lock   *session.CodexAcceptanceLock
 	fence  codexAcceptanceFence
 	marker *session.CodexSubmissionMarker
+	// resolved is the earlier attempt this guard's reconcile archived, if any.
+	resolved *session.CodexMarkerResolution
+}
+
+// markerCreatedAt is the cut delivery evidence for this send must postdate:
+// the marker's creation, or the fence capture before the marker exists.
+func (g *codexAcceptanceGuard) markerCreatedAt() time.Time {
+	if g == nil {
+		return time.Time{}
+	}
+	if g.marker != nil {
+		return g.marker.CreatedAt
+	}
+	return g.fence.capturedAt
 }
 
 func (g *codexAcceptanceGuard) Release() {
@@ -4293,7 +4408,7 @@ func (g *codexAcceptanceGuard) Prepare(instanceID string, now time.Time) error {
 		return fmt.Errorf("Codex acceptance guard is not ready to prepare a submission")
 	}
 	marker, err := session.PrepareCodexSubmissionMarker(
-		instanceID, g.fence.codexSessionID, g.fence.priorTurnGeneration, now,
+		instanceID, g.fence.codexSessionID, g.fence.priorTurnGeneration, g.fence.state.RolloutOffset, now,
 	)
 	if err != nil {
 		return err
@@ -4307,7 +4422,7 @@ func (g *codexAcceptanceGuard) RecordTransportOutcome(delivery string, now time.
 		return fmt.Errorf("Codex submission marker is unavailable")
 	}
 	switch delivery {
-	case deliveryLineTooLong, deliveryComposerBlocked, deliveryTargetBusy:
+	case deliveryLineTooLong, deliveryComposerBlocked, deliveryTargetBusy, deliveryDialogBlocked:
 		return session.ClearCodexSubmissionMarker(g.marker)
 	case deliverySubmitted:
 		return g.marker.MarkSubmitted(now)
@@ -4366,7 +4481,7 @@ func hydrateLegacyCodexIdentity(
 		}
 		if liveCodexSessionID(peer) == inst.CodexSessionID {
 			restore()
-			return fmt.Errorf("live Codex session identity is already owned by another session")
+			return errCodexIdentityContested
 		}
 	}
 
@@ -4435,7 +4550,7 @@ func acquireCodexAcceptanceGuard(inst *session.Instance, timeout time.Duration) 
 		return nil, fmt.Errorf("target is not Codex-compatible")
 	}
 	if !inst.CodexRolloutIsResolvableLocally() {
-		return nil, fmt.Errorf("exact rollout is unavailable for remote or sandboxed sessions")
+		return nil, errCodexRolloutNotLocal
 	}
 	if strings.TrimSpace(inst.CodexSessionID) == "" {
 		return nil, errCodexIdentityUnavailable
@@ -4449,11 +4564,18 @@ func acquireCodexAcceptanceGuard(inst *session.Instance, timeout time.Duration) 
 		lock.Release()
 		return nil, errCodexGenerationUnavailable
 	}
-	if _, err := session.ReconcileCodexSubmissionMarker(inst.ID, inst.CodexSessionID, fence.priorTurnGeneration); err != nil {
+	resolution, err := session.ReconcileCodexSubmissionMarkerWithEvidence(
+		inst.ID, inst.CodexSessionID, fence.priorTurnGeneration, inst.CodexDeliveryEvidenceSince, time.Now(),
+	)
+	if err != nil {
 		lock.Release()
 		return nil, err
 	}
-	return &codexAcceptanceGuard{lock: lock, fence: fence}, nil
+	if resolution != nil {
+		fmt.Fprintf(os.Stderr, "Note: earlier Codex submission %s resolved from rollout evidence (%s, %s); marker archived to %s\n",
+			resolution.AttemptID, resolution.Evidence.Kind, resolution.Evidence.Basis, resolution.ArchivedTo)
+	}
+	return &codexAcceptanceGuard{lock: lock, fence: fence, resolved: resolution}, nil
 }
 
 func validateCodexAcceptanceFence(inst *session.Instance, fence codexAcceptanceFence) error {
@@ -4515,14 +4637,16 @@ func captureCodexAcceptanceFence(inst *session.Instance) codexAcceptanceFence {
 	if inst.CodexSessionID == "" {
 		return codexAcceptanceFence{}
 	}
-	generation, err := inst.LatestCodexTurnGeneration()
+	state, err := inst.CodexRolloutTurnState()
 	if err != nil {
 		return codexAcceptanceFence{}
 	}
 	return codexAcceptanceFence{
 		codexSessionID:      inst.CodexSessionID,
-		priorTurnGeneration: generation,
+		priorTurnGeneration: state.Generation,
 		available:           true,
+		state:               state,
+		capturedAt:          time.Now(),
 	}
 }
 
@@ -4618,6 +4742,9 @@ func responseReadFailureData(data map[string]interface{}) map[string]interface{}
 // contract; #1409 draft-guard observability).
 func (r sendDeliveryResult) jsonFields() map[string]interface{} {
 	fields := map[string]interface{}{}
+	if r.reasonCode != "" {
+		fields["reason_code"] = r.reasonCode
+	}
 	if r.delivery != "" {
 		fields["delivery"] = r.delivery
 		// Explicit, machine-checkable: a caller must not have to know which
@@ -4689,6 +4816,9 @@ type sendExecTuning struct {
 	settleDelay time.Duration
 	// retry is the verification-loop budget (issues #876, #1413).
 	retry sendRetryOptions
+	// codexLastMoment makes executeSend look at a Codex pane right before
+	// typing and refuse on a modal or a live turn (WO-DECK-CODEX-DELIVERY-01).
+	codexLastMoment bool
 }
 
 // defaultSendTuning is the tuning for the default (readiness-waited) send
@@ -4741,6 +4871,16 @@ func noWaitSendTuning() sendExecTuning {
 func executeSend(target sendRetryTarget, tool, message string, noWait bool, tun sendExecTuning) (sendDeliveryResult, error) {
 	res := sendDeliveryResult{}
 	claudeLike := session.IsClaudeCompatible(tool)
+
+	// WO-DECK-CODEX-DELIVERY-01: the last look before a Codex keystroke. A
+	// modal or a live turn that appeared since the send's gate refuses with
+	// nothing typed.
+	if tun.codexLastMoment && session.IsCodexCompatible(tool) {
+		if delivery, reasonCode, err := codexLastMomentGate(target); err != nil {
+			res.delivery, res.reasonCode = delivery, reasonCode
+			return res, err
+		}
+	}
 
 	if noWait && claudeLike {
 		if awaitComposerReadyBestEffort(target, tun.preflightWait, tun.preflightPoll) {

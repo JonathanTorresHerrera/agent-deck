@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,10 @@ import (
 	"testing"
 	"time"
 )
+
+// oldCodexTurnScanWindow is the backward window the turn scan had before
+// WO-DECK-CODEX-DELIVERY-01 removed it.
+const oldCodexTurnScanWindow = int64(8 << 20)
 
 func isolateCodexSubmissionMarkers(t *testing.T) string {
 	t.Helper()
@@ -22,7 +27,7 @@ func isolateCodexSubmissionMarkers(t *testing.T) string {
 func TestCodexSubmissionMarkerIsPrivateAtomicAndContentFree(t *testing.T) {
 	isolateCodexSubmissionMarkers(t)
 	marker, err := PrepareCodexSubmissionMarker(
-		"instance-private", "thread-private", "thread-private:turn-old",
+		"instance-private", "thread-private", "thread-private:turn-old", 4096,
 		time.Date(2026, 9, 14, 15, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -56,7 +61,7 @@ func TestCodexSubmissionMarkerIsPrivateAtomicAndContentFree(t *testing.T) {
 	}
 	wantFields := []string{
 		"version", "instance_id", "codex_session_id", "attempt_id",
-		"prior_turn_generation", "phase", "created_at", "updated_at",
+		"prior_turn_generation", "phase", "created_at", "updated_at", "rollout_offset",
 	}
 	if len(fields) != len(wantFields) {
 		t.Fatalf("marker fields = %v, want only %v", fields, wantFields)
@@ -81,7 +86,7 @@ func TestCodexSubmissionMarkerIsPrivateAtomicAndContentFree(t *testing.T) {
 func TestCodexSubmissionMarkerReconciliationFailsClosedThenClearsOnGeneration(t *testing.T) {
 	isolateCodexSubmissionMarkers(t)
 	marker, err := PrepareCodexSubmissionMarker(
-		"instance-reconcile", "thread-reconcile", "thread-reconcile:turn-old", time.Now(),
+		"instance-reconcile", "thread-reconcile", "thread-reconcile:turn-old", 0, time.Now(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +99,7 @@ func TestCodexSubmissionMarkerReconciliationFailsClosedThenClearsOnGeneration(t 
 		marker.InstanceID, marker.CodexSessionID, marker.PriorTurnGeneration,
 	)
 	if err == nil || accepted != "" || !strings.Contains(err.Error(), path) ||
-		!strings.Contains(err.Error(), "manually remove") {
+		!errors.Is(err, ErrUnresolvedCodexSubmission) || !strings.Contains(err.Error(), "agent-deck codex-markers") {
 		t.Fatalf("unchanged generation did not wedge with recovery path: accepted=%q err=%v", accepted, err)
 	}
 	if _, statErr := os.Stat(path); statErr != nil {
@@ -108,6 +113,18 @@ func TestCodexSubmissionMarkerReconciliationFailsClosedThenClearsOnGeneration(t 
 	}
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 		t.Fatalf("reconciled marker still exists: %v", statErr)
+	}
+	root, err := CodexSubmissionArchiveRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, _ := filepath.Glob(filepath.Join(root, "reconciled-*", filepath.Base(path)))
+	if len(archived) != 1 {
+		t.Fatalf("reconciled marker was not archived under %s: %v", root, archived)
+	}
+	manifest, err := os.ReadFile(filepath.Join(filepath.Dir(archived[0]), "MANIFEST.jsonl"))
+	if err != nil || !strings.Contains(string(manifest), marker.AttemptID) || !strings.Contains(string(manifest), `"kind":"new_turn"`) {
+		t.Fatalf("archive manifest does not record the attempt and its evidence: %s (%v)", manifest, err)
 	}
 }
 
@@ -133,7 +150,7 @@ func TestCodexSubmissionMarkerRejectsMalformedAndWrongOwner(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	marker, err := PrepareCodexSubmissionMarker("instance-owner", "thread-malformed", "", time.Now())
+	marker, err := PrepareCodexSubmissionMarker("instance-owner", "thread-malformed", "", 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,13 +171,13 @@ func TestCodexSubmissionMarkerRejectsUnsafeModesAndPaths(t *testing.T) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareCodexSubmissionMarker("instance-mode", "thread-mode", "", time.Now()); err == nil {
+	if _, err := PrepareCodexSubmissionMarker("instance-mode", "thread-mode", "", 0, time.Now()); err == nil {
 		t.Fatal("group-readable marker directory was accepted")
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	marker, err := PrepareCodexSubmissionMarker("instance-mode", "thread-mode", "", time.Now())
+	marker, err := PrepareCodexSubmissionMarker("instance-mode", "thread-mode", "", 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +198,7 @@ func TestCodexSubmissionMarkerRejectsUnsafeModesAndPaths(t *testing.T) {
 
 func TestCodexSubmissionMarkerClearsOnlyForDefinitiveOutcome(t *testing.T) {
 	isolateCodexSubmissionMarkers(t)
-	marker, err := PrepareCodexSubmissionMarker("instance-clear", "thread-clear", "", time.Now())
+	marker, err := PrepareCodexSubmissionMarker("instance-clear", "thread-clear", "", 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +237,7 @@ func TestCodexSubmissionMarkerSurvivesProcessExitBeforeAndAfterSubmittedEvidence
 			os.Exit(2)
 		}
 		_ = lock // Deliberately leaked: process exit must release the flock.
-		marker, err := PrepareCodexSubmissionMarker("instance-crash", "thread-crash", "", time.Now())
+		marker, err := PrepareCodexSubmissionMarker("instance-crash", "thread-crash", "", 0, time.Now())
 		if err != nil {
 			os.Exit(3)
 		}
@@ -335,7 +352,7 @@ func TestLatestCodexTurnGenerationScansBoundedTail(t *testing.T) {
 
 	t.Run("start exactly at byte boundary remains visible", func(t *testing.T) {
 		start := `{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-boundary"}}` + "\n"
-		padding := strings.Repeat(" ", int(codexTurnGenerationScanMaxBytes)-len(start))
+		padding := strings.Repeat(" ", int(oldCodexTurnScanWindow)-len(start))
 		inst := writeRollout(t, "thread-boundary", "outside\n"+start+padding)
 		generation, err := inst.LatestCodexTurnGeneration()
 		if err != nil {
@@ -346,18 +363,21 @@ func TestLatestCodexTurnGenerationScansBoundedTail(t *testing.T) {
 		}
 	})
 
-	t.Run("start beyond byte boundary fails closed", func(t *testing.T) {
+	t.Run("start beyond the old 8 MiB window is still the newest start", func(t *testing.T) {
+		// WO-DECK-CODEX-DELIVERY-01: a long Codex turn writes far more than
+		// 8 MiB after its start. Reading that as "no turn" gave every marker
+		// a "" generation that could never reconcile.
 		starts := strings.Join([]string{
 			`{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-stale"}}`,
 			`{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-outside"}}`,
 		}, "\n") + "\n"
-		inst := writeRollout(t, "thread-outside", starts+strings.Repeat(" ", int(codexTurnGenerationScanMaxBytes)+1))
+		inst := writeRollout(t, "thread-outside", starts+strings.Repeat(" ", int(oldCodexTurnScanWindow)+1)+"\n")
 		generation, err := inst.LatestCodexTurnGeneration()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if generation != "" {
-			t.Fatalf("generation = %q, want no stale generation beyond scan bound", generation)
+		if generation != "thread-outside:turn-outside" {
+			t.Fatalf("generation = %q, want the newest start however far back it is", generation)
 		}
 	})
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -657,8 +658,9 @@ func TestCodexAcceptanceGuardReconcilesOrdinarySendBeforeStructuredRetry(t *test
 	if guard, err := acquireCodexAcceptanceGuard(inst, time.Second); err == nil {
 		guard.Release()
 		t.Fatal("structured sender crossed an unresolved ordinary submission")
-	} else if !strings.Contains(err.Error(), "manually remove") {
-		t.Fatalf("unresolved refusal omitted recovery path: %v", err)
+	} else if !errors.Is(err, session.ErrUnresolvedCodexSubmission) || codexAcceptanceReasonCode(err) != reasonUnresolvedSubmission ||
+		!strings.Contains(err.Error(), "agent-deck codex-markers") {
+		t.Fatalf("unresolved refusal omitted its reason or recovery path: %v", err)
 	}
 
 	if err := appendCodexTurnStart(path, "turn-ordinary"); err != nil {
