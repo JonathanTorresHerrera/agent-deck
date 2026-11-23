@@ -99,7 +99,9 @@ func isCodexArgv(argv []string) bool {
 
 // isCodexAppServerArgv reports whether argv is Codex's app-server, the
 // process that serves every TUI of one CODEX_HOME: `codex app-server ...`,
-// or a binary from the managed app-server-daemon package.
+// a binary from the managed app-server-daemon package, or a process started
+// with --managed-daemon. Any one marker is enough; a daemon that carried none
+// would read as a pane, so they are deliberately redundant.
 func isCodexAppServerArgv(argv []string) bool {
 	if !isCodexArgv(argv) {
 		return false
@@ -108,7 +110,7 @@ func isCodexAppServerArgv(argv []string) bool {
 		return true
 	}
 	for _, arg := range argv[1:] {
-		if arg == "app-server" {
+		if arg == "app-server" || arg == "--managed-daemon" || strings.HasPrefix(arg, "--managed-daemon=") {
 			return true
 		}
 	}
@@ -215,10 +217,11 @@ func routeCodexNotify(envID, threadID string, threadFromPayload bool, cwd string
 		}
 		// A `codex exec` started inside the pane inherits its environment.
 		// Its thread may still report status for an unbound session (a
-		// task-worker pane runs exactly that), but never moves a binding.
-		// Without a Codex home the rollout cannot be read, so the thread
-		// cannot be shown not to be one.
-		if home == "" || session.CodexExecThread(threadID, home) {
+		// task-worker pane runs exactly that), but never moves a binding. So
+		// pane evidence needs the thread's rollout to show an interactive
+		// conversation: an exec run, a subagent, a thread whose rollout is
+		// not flushed yet or a notify without a Codex home gets none.
+		if home == "" || !session.CodexInteractiveThread(threadID, home) {
 			return codexNotifyRoute{instanceID: envID}
 		}
 		return codexNotifyRoute{instanceID: envID, evidence: session.CodexThreadEvidencePane}
@@ -260,13 +263,14 @@ func routeCodexNotifyByBinding(envID, threadID, cwd string, envFallback bool) co
 		}
 		return codexNotifyRoute{instanceID: owner.InstanceID, evidence: session.CodexThreadEvidenceBinding}
 	case 0:
-		if !envFallback {
-			return codexNotifyRoute{reason: "thread_bound_to_no_session"}
-		}
 		// A store that could not be read may hold the owner; filing the
-		// thread under the env session could then bind it to a sibling's.
+		// thread under the env session could then bind it to a sibling's,
+		// and the drop must say why it happened.
 		if lookup.Incomplete {
 			return codexNotifyRoute{reason: "session_store_incomplete"}
+		}
+		if !envFallback {
+			return codexNotifyRoute{reason: "thread_bound_to_no_session"}
 		}
 		if env := lookup.Env; env != nil {
 			if env.CodexSessionID != "" && env.CodexSessionID != threadID {

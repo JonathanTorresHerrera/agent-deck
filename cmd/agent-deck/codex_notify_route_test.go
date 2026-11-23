@@ -460,6 +460,7 @@ func TestClassifyCodexNotifySource(t *testing.T) {
 		{"shared daemon", map[int][]string{100: {daemonBin, "app-server", "--listen", "unix://"}}, nil, codexNotifyFromDaemon},
 		{"daemon from another install", map[int][]string{100: {tui, "app-server", "--listen", "unix://"}}, nil, codexNotifyFromDaemon},
 		{"daemon package binary", map[int][]string{100: {daemonBin, "--listen"}}, nil, codexNotifyFromDaemon},
+		{"managed daemon flag alone", map[int][]string{100: {tui, "serve", "--managed-daemon"}}, nil, codexNotifyFromDaemon},
 		{"through env and sh", map[int][]string{100: {"/usr/bin/env", "X=1", "agent-deck"}, 90: {"sh", "-c", "x"}, 80: {daemonBin, "app-server"}},
 			map[int]int{100: 90, 90: 80}, codexNotifyFromDaemon},
 		{"not codex", map[int][]string{100: {"/usr/bin/python3", "wrapper.py"}}, nil, codexNotifyFromUnknown},
@@ -520,12 +521,15 @@ func TestArgvFromPS(t *testing.T) {
 	}
 }
 
-// Without a Codex home no rollout can be read, so an exec child's thread
-// cannot be told apart: the pane record carries no evidence.
-func TestRouteCodexNotify_PaneWithoutCodexHomeCarriesNoEvidence(t *testing.T) {
-	route := routeCodexNotify("pane-0018", routeThread(), true, "", codexNotifyFromPane, "")
-	if route.instanceID != "pane-0018" || route.evidence != "" {
-		t.Fatalf("route = %+v, want the env session without evidence", route)
+// Pane evidence needs the thread's rollout to show an interactive
+// conversation. Without a Codex home, or before the rollout is flushed, an
+// exec child's thread cannot be told apart: the record carries no evidence.
+func TestRouteCodexNotify_PaneWithoutInteractiveRolloutCarriesNoEvidence(t *testing.T) {
+	for _, home := range []string{"", t.TempDir()} {
+		route := routeCodexNotify("pane-0018", routeThread(), true, "", codexNotifyFromPane, home)
+		if route.instanceID != "pane-0018" || route.evidence != "" {
+			t.Fatalf("home %q: route = %+v, want the env session without evidence", home, route)
+		}
 	}
 }
 
@@ -540,9 +544,11 @@ func TestRouteCodexNotify_IncompleteStoreLookup(t *testing.T) {
 	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {
 		return session.CodexThreadLookup{Incomplete: true}, nil
 	}
-	if route := routeCodexNotify("env-0019", thread, true, "", codexNotifyFromUnknown, ""); route.instanceID != "" ||
-		route.reason != "session_store_incomplete" {
-		t.Fatalf("unknown source, incomplete and unowned: route = %+v, want a drop", route)
+	for _, source := range []codexNotifySource{codexNotifyFromUnknown, codexNotifyFromDaemon} {
+		if route := routeCodexNotify("env-0019", thread, true, "", source, ""); route.instanceID != "" ||
+			route.reason != "session_store_incomplete" {
+			t.Fatalf("%v source, incomplete and unowned: route = %+v, want a drop that says the store was incomplete", source, route)
+		}
 	}
 
 	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {

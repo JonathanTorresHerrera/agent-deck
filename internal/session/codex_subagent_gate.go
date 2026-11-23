@@ -217,17 +217,19 @@ func CodexSubagentThread(threadID, codexHome string) bool {
 	return ok && meta.ThreadSource == "subagent"
 }
 
-// CodexExecThread reports whether threadID's rollout under codexHome is a
-// `codex exec` run. A `codex exec` started inside a pane inherits the pane's
-// environment and fires the same notify, but its thread is not the pane's
-// conversation. Threads without a flushed rollout are not exec threads here.
-func CodexExecThread(threadID, codexHome string) bool {
+// CodexInteractiveThread reports whether threadID has a flushed rollout under
+// codexHome that is an interactive conversation: not a subagent thread and
+// not a `codex exec` run. A `codex exec` started inside a pane inherits the
+// pane's environment and fires the same notify, but its thread is not the
+// pane's conversation. A thread with no rollout yet is not known to be
+// interactive, so it reports false.
+func CodexInteractiveThread(threadID, codexHome string) bool {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return false
 	}
 	meta, ok := codexThreadMetaForSession(threadID, codexHome)
-	return ok && meta.Exec
+	return ok && !meta.Exec && meta.ThreadSource != "subagent"
 }
 
 // codexHookFromForeignThread reports whether a hook status record belongs to a
