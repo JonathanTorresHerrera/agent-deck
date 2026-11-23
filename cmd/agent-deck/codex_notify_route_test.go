@@ -463,6 +463,10 @@ func TestClassifyCodexNotifySource(t *testing.T) {
 		{"through env and sh", map[int][]string{100: {"/usr/bin/env", "X=1", "agent-deck"}, 90: {"sh", "-c", "x"}, 80: {daemonBin, "app-server"}},
 			map[int]int{100: 90, 90: 80}, codexNotifyFromDaemon},
 		{"not codex", map[int][]string{100: {"/usr/bin/python3", "wrapper.py"}}, nil, codexNotifyFromUnknown},
+		// An interpreter running a script named after codex is not the Codex
+		// binary: its parent may be the daemon, so its env is no evidence.
+		{"script named codex", map[int][]string{100: {"/usr/bin/python3", "/opt/codex_notify_bridge.py"}}, nil, codexNotifyFromUnknown},
+		{"node running codex", map[int][]string{100: {"/usr/bin/node", "/opt/bin/codex", "app-server"}}, nil, codexNotifyFromUnknown},
 		{"unreadable parent", map[int][]string{}, nil, codexNotifyFromUnknown},
 		{"wrapper chain too long", map[int][]string{100: {"sh"}, 99: {"sh"}, 98: {"sh"}, 97: {"sh"}, 96: {tui}},
 			map[int]int{100: 99, 99: 98, 98: 97, 97: 96}, codexNotifyFromUnknown},
@@ -488,6 +492,67 @@ func TestClassifyCodexNotifySource(t *testing.T) {
 				t.Fatalf("classifyCodexNotifySource() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// ps joins argv with spaces. A Codex home under a path with spaces must still
+// yield the executable as one argument, or a daemon reads as unknown.
+func TestArgvFromPS(t *testing.T) {
+	const daemon = "/Users/First Last/.codex/packages/app-server-daemon/releases/0.171.0/bin/codex"
+	cases := []struct {
+		name, comm, args string
+		want             []string
+	}{
+		{"spaced executable", daemon, daemon + " app-server --listen unix://", []string{daemon, "app-server", "--listen", "unix://"}},
+		{"comm is the bare name", "codex", "/opt/bin/codex --yolo resume 01b0", []string{"codex", "--yolo", "resume", "01b0"}},
+		{"no comm", "", "/opt/bin/codex exec task", []string{"/opt/bin/codex", "exec", "task"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := argvFromPS(tc.comm+"\n", tc.args+"\n")
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("argvFromPS = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if !isCodexAppServerArgv(argvFromPS(daemon, daemon+" app-server --listen unix://")) {
+		t.Fatal("a daemon under a spaced home must classify as the app-server")
+	}
+}
+
+// Without a Codex home no rollout can be read, so an exec child's thread
+// cannot be told apart: the pane record carries no evidence.
+func TestRouteCodexNotify_PaneWithoutCodexHomeCarriesNoEvidence(t *testing.T) {
+	route := routeCodexNotify("pane-0018", routeThread(), true, "", codexNotifyFromPane, "")
+	if route.instanceID != "pane-0018" || route.evidence != "" {
+		t.Fatalf("route = %+v, want the env session without evidence", route)
+	}
+}
+
+// A store that could not be read may hold the thread's owner. An unowned
+// answer is then not trusted for the env fallback, while an owner that was
+// found is still routed to.
+func TestRouteCodexNotify_IncompleteStoreLookup(t *testing.T) {
+	thread := routeThread()
+	restore := codexThreadLookup
+	t.Cleanup(func() { codexThreadLookup = restore })
+
+	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {
+		return session.CodexThreadLookup{Incomplete: true}, nil
+	}
+	if route := routeCodexNotify("env-0019", thread, true, "", codexNotifyFromUnknown, ""); route.instanceID != "" ||
+		route.reason != "session_store_incomplete" {
+		t.Fatalf("unknown source, incomplete and unowned: route = %+v, want a drop", route)
+	}
+
+	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {
+		return session.CodexThreadLookup{Incomplete: true, Owners: []session.CodexThreadBinding{{InstanceID: "owner-0020", Tool: "codex"}}}, nil
+	}
+	for _, source := range []codexNotifySource{codexNotifyFromUnknown, codexNotifyFromDaemon} {
+		route := routeCodexNotify("env-0019", thread, true, "", source, "")
+		if route.instanceID != "owner-0020" || route.evidence != session.CodexThreadEvidenceBinding {
+			t.Fatalf("%v source, incomplete with an owner: route = %+v, want the owner", source, route)
+		}
 	}
 }
 

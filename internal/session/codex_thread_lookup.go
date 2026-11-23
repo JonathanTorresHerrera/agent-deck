@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
@@ -37,6 +39,9 @@ type CodexThreadLookup struct {
 	Owners []CodexThreadBinding
 	// Env is the env instance's own row; nil when no readable store has it.
 	Env *CodexThreadBinding
+	// Incomplete says some profile store could not be listed or read, so a
+	// session missing from Owners may still be bound to the thread.
+	Incomplete bool
 }
 
 // LookupCodexThreadBindings reads every profile's session store, read-only
@@ -44,31 +49,33 @@ type CodexThreadLookup struct {
 // sessions bound to threadID and for envInstanceID's own row. It is one
 // targeted query per profile, so it is cheap enough for the notify hook,
 // which runs on every Codex turn end. An error means no store could be read
-// at all; a store that fails among readable ones is skipped.
+// at all; a store that fails among readable ones marks the answer
+// Incomplete rather than failing it.
 func LookupCodexThreadBindings(threadID, envInstanceID string) (CodexThreadLookup, error) {
 	var out CodexThreadLookup
 	threadID, envInstanceID = strings.TrimSpace(threadID), strings.TrimSpace(envInstanceID)
-	profiles, err := ListProfiles()
-	if err != nil || len(profiles) == 0 {
-		profiles = []string{GetEffectiveProfile("")}
-	}
+	profiles, complete := codexLookupProfiles()
+	out.Incomplete = !complete
 	readable := 0
 	var errs error
 	for _, profile := range profiles {
 		dbPath, err := GetDBPathForProfile(profile)
 		if err != nil {
 			errs = errors.Join(errs, err)
+			out.Incomplete = true
 			continue
 		}
 		db, err := statedb.OpenReadOnlyLive(dbPath)
 		if err != nil {
 			errs = errors.Join(errs, err)
+			out.Incomplete = true
 			continue
 		}
 		rows, err := db.CodexBindingRows(threadID, envInstanceID)
 		_ = db.Close()
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("profile %s: %w", profile, err))
+			out.Incomplete = true
 			continue
 		}
 		readable++
@@ -90,6 +97,38 @@ func LookupCodexThreadBindings(threadID, envInstanceID string) (CodexThreadLooku
 		return out, fmt.Errorf("codex thread lookup: no readable session store: %w", errs)
 	}
 	return out, nil
+}
+
+// codexLookupProfiles lists the profiles whose stores the lookup reads, and
+// whether that list is complete. ListProfiles gives up on the first entry it
+// cannot inspect; here one such entry only makes the list incomplete, so the
+// stores that can be read still are. With no profiles directory at all, the
+// effective profile is tried (it is the only store a fresh install has).
+func codexLookupProfiles() ([]string, bool) {
+	if profiles, err := ListProfiles(); err == nil {
+		if len(profiles) == 0 {
+			return []string{GetEffectiveProfile("")}, true
+		}
+		return profiles, true
+	}
+	dir, err := GetProfilesDir()
+	if err != nil {
+		return []string{GetEffectiveProfile("")}, false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{GetEffectiveProfile("")}, false
+	}
+	var profiles []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, entry.Name(), "state.db")); err == nil {
+			profiles = append(profiles, entry.Name())
+		}
+	}
+	return profiles, false
 }
 
 func codexThreadBindingFromRow(profile string, r statedb.CodexBindingRow) CodexThreadBinding {

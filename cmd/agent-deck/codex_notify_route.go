@@ -75,7 +75,7 @@ func classifyCodexNotifySource() codexNotifySource {
 		switch {
 		case isCodexAppServerArgv(argv):
 			return codexNotifyFromDaemon
-		case codexArgvIndex(argv) >= 0:
+		case isCodexArgv(argv):
 			return codexNotifyFromPane
 		case !isNotifyWrapperArgv(argv):
 			return codexNotifyFromUnknown
@@ -89,29 +89,25 @@ func classifyCodexNotifySource() codexNotifySource {
 	return codexNotifyFromUnknown
 }
 
-// codexArgvIndex is the index of the Codex executable in argv (a node
-// wrapper puts it second), or -1.
-func codexArgvIndex(argv []string) int {
-	for i := 0; i < len(argv) && i < 2; i++ {
-		if strings.Contains(strings.ToLower(filepath.Base(argv[i])), "codex") {
-			return i
-		}
-	}
-	return -1
+// isCodexArgv reports whether the process is the Codex executable itself.
+// Only argv[0] counts: the process that spawns notify is the native Codex
+// binary, and an interpreter running a script whose name mentions codex
+// (`python3 codex_bridge.py`) is a wrapper of unknown provenance, not a pane.
+func isCodexArgv(argv []string) bool {
+	return len(argv) > 0 && strings.Contains(strings.ToLower(filepath.Base(argv[0])), "codex")
 }
 
 // isCodexAppServerArgv reports whether argv is Codex's app-server, the
 // process that serves every TUI of one CODEX_HOME: `codex app-server ...`,
 // or a binary from the managed app-server-daemon package.
 func isCodexAppServerArgv(argv []string) bool {
-	k := codexArgvIndex(argv)
-	if k < 0 {
+	if !isCodexArgv(argv) {
 		return false
 	}
-	if strings.Contains(filepath.ToSlash(argv[k]), "/app-server-daemon/") {
+	if strings.Contains(filepath.ToSlash(argv[0]), "/app-server-daemon/") {
 		return true
 	}
-	for _, arg := range argv[k+1:] {
+	for _, arg := range argv[1:] {
 		if arg == "app-server" {
 			return true
 		}
@@ -129,8 +125,7 @@ func isNotifyWrapperArgv(argv []string) bool {
 	return false
 }
 
-// processArgv reads a process's argv: /proc on Linux, ps elsewhere (where
-// arguments are split on whitespace, enough for the checks above).
+// processArgv reads a process's argv: /proc on Linux, ps elsewhere.
 func processArgv(pid int) ([]string, error) {
 	if raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline"); err == nil {
 		args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
@@ -142,11 +137,34 @@ func processArgv(pid int) ([]string, error) {
 		return nil, err
 	}
 	// #nosec G204 -- "ps" is a fixed binary; the only argument is strconv.Itoa(int).
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
+	comm, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	if err != nil {
 		return nil, err
 	}
-	return strings.Fields(string(out)), nil
+	// #nosec G204 -- "ps" is a fixed binary; the only argument is strconv.Itoa(int).
+	args, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
+	if err != nil {
+		return nil, err
+	}
+	return argvFromPS(string(comm), string(args)), nil
+}
+
+// argvFromPS rebuilds argv from ps output. ps joins arguments with spaces, so
+// the executable is taken whole from comm (a full path on macOS, spaces
+// included, as in "/Users/First Last/.codex/...") and only the remainder of
+// args is split.
+func argvFromPS(comm, args string) []string {
+	comm, args = strings.TrimSpace(comm), strings.TrimSpace(args)
+	if comm == "" {
+		return strings.Fields(args)
+	}
+	rest := args
+	if strings.HasPrefix(args, comm) {
+		rest = args[len(comm):]
+	} else if fields := strings.Fields(args); len(fields) > 0 {
+		rest = strings.Join(fields[1:], " ")
+	}
+	return append([]string{comm}, strings.Fields(rest)...)
 }
 
 // processParentPID reads a process's parent pid: /proc/<pid>/stat on Linux
@@ -198,7 +216,9 @@ func routeCodexNotify(envID, threadID string, threadFromPayload bool, cwd string
 		// A `codex exec` started inside the pane inherits its environment.
 		// Its thread may still report status for an unbound session (a
 		// task-worker pane runs exactly that), but never moves a binding.
-		if home != "" && session.CodexExecThread(threadID, home) {
+		// Without a Codex home the rollout cannot be read, so the thread
+		// cannot be shown not to be one.
+		if home == "" || session.CodexExecThread(threadID, home) {
 			return codexNotifyRoute{instanceID: envID}
 		}
 		return codexNotifyRoute{instanceID: envID, evidence: session.CodexThreadEvidencePane}
@@ -218,8 +238,9 @@ func routeCodexNotify(envID, threadID string, threadFromPayload bool, cwd string
 
 // routeCodexNotifyByBinding files the event under the one live session the
 // stores bind threadID to. envFallback keeps the old destination, without
-// evidence, when the stores cannot be read or bind the thread to nobody and
-// the env session is not bound elsewhere.
+// evidence, when no store can be read at all (a sandbox or remote host has
+// none), or when every store was read, none binds the thread, and the env
+// session is not bound elsewhere.
 func routeCodexNotifyByBinding(envID, threadID, cwd string, envFallback bool) codexNotifyRoute {
 	lookup, err := codexThreadLookup(threadID, envID)
 	if err != nil {
@@ -241,6 +262,11 @@ func routeCodexNotifyByBinding(envID, threadID, cwd string, envFallback bool) co
 	case 0:
 		if !envFallback {
 			return codexNotifyRoute{reason: "thread_bound_to_no_session"}
+		}
+		// A store that could not be read may hold the owner; filing the
+		// thread under the env session could then bind it to a sibling's.
+		if lookup.Incomplete {
+			return codexNotifyRoute{reason: "session_store_incomplete"}
 		}
 		if env := lookup.Env; env != nil {
 			if env.CodexSessionID != "" && env.CodexSessionID != threadID {
