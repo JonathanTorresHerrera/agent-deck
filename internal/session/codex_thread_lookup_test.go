@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -153,8 +154,30 @@ func TestLookupCodexThreadBindingsMarksUnreadableStoresIncomplete(t *testing.T) 
 
 func TestLookupCodexThreadBindingsWithoutStoreFails(t *testing.T) {
 	isolateProfileStores(t)
-	if _, err := LookupCodexThreadBindings(uniqueSID(t), "nobody"); err == nil {
+	_, err := LookupCodexThreadBindings(uniqueSID(t), "nobody")
+	if err == nil {
 		t.Fatal("no readable store must be an error, not an empty answer")
+	}
+	if !errors.Is(err, ErrNoCodexThreadStore) {
+		t.Fatalf("a host with no store at all must say so: %v", err)
+	}
+
+	// A store that exists but cannot be read is a different failure: the
+	// owner may be in it.
+	profilesDir, err := GetProfilesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	garbage := filepath.Join(profilesDir, "lookup_only_garbage")
+	if err := os.MkdirAll(garbage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(garbage, "state.db"), []byte("not a sqlite database at all, just text"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LookupCodexThreadBindings(uniqueSID(t), "nobody")
+	if err == nil || errors.Is(err, ErrNoCodexThreadStore) {
+		t.Fatalf("an unreadable store must fail without claiming there is none: %v", err)
 	}
 }
 

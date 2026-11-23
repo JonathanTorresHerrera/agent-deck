@@ -44,19 +44,25 @@ type CodexThreadLookup struct {
 	Incomplete bool
 }
 
+// ErrNoCodexThreadStore says the host has no session store at all, as in a
+// sandbox or on a remote host, as opposed to stores that exist but could not
+// be read.
+var ErrNoCodexThreadStore = errors.New("no session store on this host")
+
 // LookupCodexThreadBindings reads every profile's session store, read-only
 // (committed WAL state included, nothing written, no checkpoint), for the
 // sessions bound to threadID and for envInstanceID's own row. It is one
 // targeted query per profile, so it is cheap enough for the notify hook,
 // which runs on every Codex turn end. An error means no store could be read
-// at all; a store that fails among readable ones marks the answer
-// Incomplete rather than failing it.
+// at all, and wraps ErrNoCodexThreadStore when there was none to read; a
+// store that fails among readable ones marks the answer Incomplete rather
+// than failing it.
 func LookupCodexThreadBindings(threadID, envInstanceID string) (CodexThreadLookup, error) {
 	var out CodexThreadLookup
 	threadID, envInstanceID = strings.TrimSpace(threadID), strings.TrimSpace(envInstanceID)
 	profiles, complete := codexLookupProfiles()
 	out.Incomplete = !complete
-	readable := 0
+	readable, present := 0, 0
 	var errs error
 	for _, profile := range profiles {
 		dbPath, err := GetDBPathForProfile(profile)
@@ -65,6 +71,15 @@ func LookupCodexThreadBindings(threadID, envInstanceID string) (CodexThreadLooku
 			out.Incomplete = true
 			continue
 		}
+		if _, err := os.Stat(dbPath); err != nil {
+			if !os.IsNotExist(err) {
+				present++ // there, but not even stat-able
+			}
+			errs = errors.Join(errs, err)
+			out.Incomplete = true
+			continue
+		}
+		present++
 		db, err := statedb.OpenReadOnlyLive(dbPath)
 		if err != nil {
 			errs = errors.Join(errs, err)
@@ -91,6 +106,9 @@ func LookupCodexThreadBindings(threadID, envInstanceID string) (CodexThreadLooku
 		}
 	}
 	if readable == 0 {
+		if present == 0 && complete {
+			return out, fmt.Errorf("codex thread lookup: %w", ErrNoCodexThreadStore)
+		}
 		if errs == nil {
 			errs = errors.New("no profile store")
 		}

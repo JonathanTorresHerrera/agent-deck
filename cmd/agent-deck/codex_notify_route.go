@@ -101,15 +101,25 @@ func isCodexArgv(argv []string) bool {
 // process that serves every TUI of one CODEX_HOME: `codex app-server ...`,
 // a binary from the managed app-server-daemon package, or a process started
 // with --managed-daemon. Any one marker is enough; a daemon that carried none
-// would read as a pane, so they are deliberately redundant.
+// would read as a pane, so they are deliberately redundant. Unlike the pane
+// test, Codex may also sit second, behind a launcher such as node: reading a
+// process as the daemon only ever withholds trust from its environment, so
+// erring this way fails closed.
 func isCodexAppServerArgv(argv []string) bool {
-	if !isCodexArgv(argv) {
+	k := -1
+	for i := 0; i < len(argv) && i < 2; i++ {
+		if strings.Contains(strings.ToLower(filepath.Base(argv[i])), "codex") {
+			k = i
+			break
+		}
+	}
+	if k < 0 {
 		return false
 	}
-	if strings.Contains(filepath.ToSlash(argv[0]), "/app-server-daemon/") {
+	if strings.Contains(filepath.ToSlash(argv[k]), "/app-server-daemon/") {
 		return true
 	}
-	for _, arg := range argv[1:] {
+	for _, arg := range argv[k+1:] {
 		if arg == "app-server" || arg == "--managed-daemon" || strings.HasPrefix(arg, "--managed-daemon=") {
 			return true
 		}
@@ -241,13 +251,16 @@ func routeCodexNotify(envID, threadID string, threadFromPayload bool, cwd string
 
 // routeCodexNotifyByBinding files the event under the one live session the
 // stores bind threadID to. envFallback keeps the old destination, without
-// evidence, when no store can be read at all (a sandbox or remote host has
-// none), or when every store was read, none binds the thread, and the env
-// session is not bound elsewhere.
+// evidence, when the host has no session store at all (a sandbox or remote
+// host), or when every store was read, none binds the thread, and the env
+// session is not bound elsewhere. Stores that exist but cannot be read drop
+// the event.
 func routeCodexNotifyByBinding(envID, threadID, cwd string, envFallback bool) codexNotifyRoute {
 	lookup, err := codexThreadLookup(threadID, envID)
 	if err != nil {
-		if envFallback {
+		// Stores that exist but cannot be read may hold the owner; only a
+		// host with no store at all keeps the old destination.
+		if envFallback && errors.Is(err, session.ErrNoCodexThreadStore) {
 			return codexNotifyRoute{instanceID: envID}
 		}
 		return codexNotifyRoute{reason: "session_store_unreadable"}

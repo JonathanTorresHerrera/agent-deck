@@ -421,17 +421,18 @@ func TestCodexNotify_UnknownSourceUsesTheStore(t *testing.T) {
 	}
 }
 
-// The store being unreadable must not stop pane-local status for the
-// unclassifiable case: the old destination, without evidence.
+// A host with no session store at all (a sandbox, a remote host) keeps the
+// old destination for the unclassifiable case, without evidence. Stores that
+// exist but cannot be read may hold the owner, so the event is dropped.
 func TestCodexNotify_UnknownSourceWithoutStoreKeepsTheOldDestination(t *testing.T) {
 	f := newCodexRouteFixture(t, codexNotifyFromUnknown)
 	thread := routeThread()
 	f.rollout(thread, f.project("x"), "cli")
 	restore := codexThreadLookup
-	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {
-		return session.CodexThreadLookup{}, errors.New("store unreadable")
-	}
 	t.Cleanup(func() { codexThreadLookup = restore })
+	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {
+		return session.CodexThreadLookup{}, fmt.Errorf("codex thread lookup: %w", session.ErrNoCodexThreadStore)
+	}
 
 	f.notify("env-0016", turnComplete(thread, ""))
 	if rec := f.record("env-0016"); rec == nil || rec.SessionID != thread || rec.CodexThreadEvidence != "" {
@@ -443,6 +444,16 @@ func TestCodexNotify_UnknownSourceWithoutStoreKeepsTheOldDestination(t *testing.
 	f.notify("env-0017", turnComplete(thread, ""))
 	if rec := f.record("env-0017"); rec != nil {
 		t.Fatalf("daemon event filed without a readable store: %+v", rec)
+	}
+
+	// Stores present but unreadable: dropped from the unknown source too.
+	codexNotifySourceOf = func() codexNotifySource { return codexNotifyFromUnknown }
+	codexThreadLookup = func(string, string) (session.CodexThreadLookup, error) {
+		return session.CodexThreadLookup{}, errors.New("codex thread lookup: no readable session store: file is not a database")
+	}
+	f.notify("env-0021", turnComplete(thread, ""))
+	if rec := f.record("env-0021"); rec != nil {
+		t.Fatalf("event filed under the env session while existing stores were unreadable: %+v", rec)
 	}
 }
 
@@ -467,7 +478,10 @@ func TestClassifyCodexNotifySource(t *testing.T) {
 		// An interpreter running a script named after codex is not the Codex
 		// binary: its parent may be the daemon, so its env is no evidence.
 		{"script named codex", map[int][]string{100: {"/usr/bin/python3", "/opt/codex_notify_bridge.py"}}, nil, codexNotifyFromUnknown},
-		{"node running codex", map[int][]string{100: {"/usr/bin/node", "/opt/bin/codex", "app-server"}}, nil, codexNotifyFromUnknown},
+		// Behind a launcher, Codex is not trusted as a pane, but its daemon
+		// markers still count: reading it as the daemon withholds trust.
+		{"node running the codex TUI", map[int][]string{100: {"/usr/bin/node", "/opt/bin/codex", "--yolo"}}, nil, codexNotifyFromUnknown},
+		{"node running the codex daemon", map[int][]string{100: {"/usr/bin/node", "/opt/bin/codex", "app-server"}}, nil, codexNotifyFromDaemon},
 		{"unreadable parent", map[int][]string{}, nil, codexNotifyFromUnknown},
 		{"wrapper chain too long", map[int][]string{100: {"sh"}, 99: {"sh"}, 98: {"sh"}, 97: {"sh"}, 96: {tui}},
 			map[int]int{100: 99, 99: 98, 98: 97, 97: 96}, codexNotifyFromUnknown},
