@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 )
@@ -29,21 +28,23 @@ var codexPaneOpenPaths = (*Instance).openCodexProcessPaths
 // means the list may be incomplete. Test seam.
 var codexPaneProcessPIDs = (*Instance).collectCodexProcessCandidates
 
+// openCodexProcessPaths lists what the pane's own Codex processes hold open,
+// plus the files of Codex's shared app-server daemon that may count as this
+// pane's (codexSharedDaemonEvidence). The daemon runs in the pane of the
+// session that started it and holds every thread it serves, riders' included.
 func (i *Instance) openCodexProcessPaths() ([]string, error) {
-	pids, probeErr := i.collectCodexProcessCandidates()
-	var paths []string
-	for _, pid := range pids {
-		var open []string
-		var err error
-		if runtime.GOOS == "linux" {
-			open, err = procFDLinkTargets(pid)
+	procs, probeErr := codexPaneProcesses(i)
+	var own, shared []string
+	for _, p := range procs {
+		open, err := codexProcessOpenFiles(p.pid)
+		if p.shared {
+			shared = append(shared, open...)
 		} else {
-			open, err = procfdOpenVnodePaths(pid)
+			own = append(own, open...)
 		}
-		paths = append(paths, open...)
 		probeErr = errors.Join(probeErr, err)
 	}
-	return paths, probeErr
+	return append(own, i.codexSharedDaemonEvidence(own, shared)...), probeErr
 }
 
 // procFDLinkTargets lists the targets of /proc/<pid>/fd. Descriptors that

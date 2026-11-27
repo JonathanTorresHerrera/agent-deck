@@ -72,7 +72,17 @@ func resolveCurrentCodexIdentity(inst *Instance, excluded map[string]bool) (stri
 		return "", fmt.Errorf("ambiguous Codex session ID: %d user rollouts started after %s in %s (CODEX_HOME=%s); refusing to guess", len(candidates), since.Format(time.RFC3339), cwd, home)
 	}
 	if len(candidates) == 1 {
-		return candidates[0], nil
+		// The disk branch can say which user rollout started in this project
+		// since the launch, not whose pane runs it: a sibling session in the
+		// same project, or its /new, matches as well as this pane's own
+		// rotation. Riders of Codex's shared app-server daemon hold no thread
+		// files at all, so this branch is all they ever reach. While Codex runs
+		// in the pane, a bound instance therefore moves only on its own process
+		// evidence above; the disk branch still bootstraps an unbound one.
+		if inst.CodexSessionID == "" || !codexPaneMayRunCodex(inst) {
+			return candidates[0], nil
+		}
+		noteCodexDiskMoveRefused(inst, candidates[0])
 	}
 	if inst.CodexSessionID != "" {
 		path := codexRolloutPathInHome(inst.CodexSessionID, home)

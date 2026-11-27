@@ -3856,37 +3856,18 @@ func collectProcessTreePIDsViaPgrep(rootPID int) ([]int, error) {
 	return allPIDs, probeErr
 }
 
+// isLikelyCodexProcessPID reports whether pid's command line names Codex
+// (codexProcessKind).
 func isLikelyCodexProcessPID(pid int) (bool, error) {
-	// Patch 53: read the command line from /proc instead of forking one
-	// `ps -p` per process. The probe runs with the instance lock held, and at
-	// ~20 ms a fork a 31-process pane tree cost ~650 ms of every status pass
-	// it landed in. /proc/<pid>/cmdline is NUL-separated argv, the same text
-	// `ps -o args=` prints. ps stays the fallback where /proc is unavailable.
-	if raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline"); err == nil {
-		return strings.Contains(strings.ToLower(strings.ReplaceAll(string(raw), "\x00", " ")), "codex"), nil
-	} else if errors.Is(err, os.ErrNotExist) && procFSAvailable() {
-		return false, fmt.Errorf("codex process probe: inspect pid %d: %w", pid, err)
-	}
-	// #nosec G204 -- "ps" is a fixed binary; only arg is strconv.Itoa(int).
-	argsOut, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
-	if err != nil {
-		return false, fmt.Errorf("codex process probe: inspect pid %d: %w", pid, err)
-	}
-	return strings.Contains(strings.ToLower(strings.TrimSpace(string(argsOut))), "codex"), nil
+	codex, _, err := codexProcessKind(pid)
+	return codex, err
 }
 
 func (i *Instance) collectCodexProcessCandidates() ([]int, error) {
-	pids, probeErr := i.collectTmuxPaneProcessTreePIDs()
-	candidates := make([]int, 0, len(pids))
-	for _, pid := range pids {
-		likely, err := isLikelyCodexProcessPID(pid)
-		if err != nil {
-			probeErr = errors.Join(probeErr, err)
-			continue
-		}
-		if likely {
-			candidates = append(candidates, pid)
-		}
+	procs, probeErr := i.collectCodexPaneProcesses()
+	candidates := make([]int, 0, len(procs))
+	for _, p := range procs {
+		candidates = append(candidates, p.pid)
 	}
 	return candidates, probeErr
 }
@@ -3951,10 +3932,19 @@ func (i *Instance) extractCodexSessionIDFromProcFD(pid int) (string, error) {
 	return "", probeErr
 }
 
+// queryCodexSessionFromHostProcFD is the rotation probe: the first rollout
+// the pane's own Codex processes hold open names the thread. Codex's shared
+// app-server daemon is skipped. It sits in the pane of the session that
+// started it and holds every thread it serves, so its first rollout may be a
+// rider's. The probe can only move a binding, and the daemon's files never may
+// (codexSharedDaemonEvidence); the identity steps before it still read them.
 func (i *Instance) queryCodexSessionFromHostProcFD() (string, error) {
-	candidates, probeErr := i.collectCodexProcessCandidates()
-	for _, pid := range candidates {
-		sessionID, err := i.extractCodexSessionIDFromProcFD(pid)
+	procs, probeErr := codexPaneProcesses(i)
+	for _, p := range procs {
+		if p.shared {
+			continue
+		}
+		sessionID, err := i.extractCodexSessionIDFromProcFD(p.pid)
 		if sessionID != "" {
 			return sessionID, nil
 		}
@@ -4118,7 +4108,14 @@ func (i *Instance) queryCodexSessionFromProcessFiles() (string, string, error) {
 
 	// Non-Linux (e.g. macOS): in-process libproc FD scan first, with lsof kept
 	// only as a compatibility fallback when the native probe cannot answer.
-	candidates, candidateErr := i.collectCodexProcessCandidates()
+	// As on Linux, the shared app-server daemon is not probed.
+	procs, candidateErr := codexPaneProcesses(i)
+	candidates := make([]int, 0, len(procs))
+	for _, p := range procs {
+		if !p.shared {
+			candidates = append(candidates, p.pid)
+		}
+	}
 	if sessionID, nativeErr := i.queryCodexSessionFromHostNative(candidates); sessionID != "" {
 		return sessionID, "", nil
 	} else if nativeErr == nil && candidateErr == nil {
