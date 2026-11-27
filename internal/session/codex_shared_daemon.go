@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Codex's shared app-server daemon (WO-DECK-CODEX-DELIVERY-01, root cause C,
@@ -210,6 +211,36 @@ func codexConversationFile(path, id, home string) bool {
 		meta, _ = codexThreadMetaForSession(id, home)
 	}
 	return !meta.valid || (!meta.Exec && meta.ThreadSource != "subagent")
+}
+
+// codexPaneExists reports whether the instance's tmux pane exists. Test seam.
+var codexPaneExists = func(i *Instance) bool { return i.tmuxSession != nil && i.tmuxSession.Exists() }
+
+// codexPaneMayRunCodex reports whether Codex may be running in the
+// instance's pane: a Codex process was found there, or the pane exists but
+// its process tree could not be read in full.
+func codexPaneMayRunCodex(inst *Instance) bool {
+	pids, err := codexPaneProcessPIDs(inst)
+	if len(pids) > 0 {
+		return true
+	}
+	return err != nil && codexPaneExists(inst)
+}
+
+// codexDiskMovesRefused remembers, per instance, the last disk-scan
+// candidate a live pane kept it from moving to, so the lifecycle log records
+// each refusal once instead of on every status pass.
+var codexDiskMovesRefused sync.Map // instance ID -> candidate thread
+
+func noteCodexDiskMoveRefused(inst *Instance, candidate string) {
+	if prev, ok := codexDiskMovesRefused.Load(inst.ID); ok && prev == candidate {
+		return
+	}
+	codexDiskMovesRefused.Store(inst.ID, candidate)
+	_ = WriteSessionIDLifecycleEvent(SessionIDLifecycleEvent{
+		InstanceID: inst.ID, Tool: inst.Tool, Action: "reject", Source: "disk_scan",
+		OldID: inst.CodexSessionID, Candidate: candidate, Reason: "live_pane_disk_move",
+	})
 }
 
 // collectCodexPaneProcesses returns the pane tree's Codex processes, each
