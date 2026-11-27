@@ -1,0 +1,23 @@
+{
+  "protocol": "ops-codex-native-v1",
+  "incarnation": "11111111-1111-4111-8111-111111111111",
+  "generation": "22222222-2222-4222-8222-222222222222",
+  "nativeThreadId": "33333333-3333-4333-8333-333333333333",
+  "event": {
+    "call_id": "call-synthetic",
+    "turn_id": "turn-synthetic",
+    "questions": [{
+      "id": "direction",
+      "header": "Choose a direction",
+      "question": "Which route should the synthetic job take? 🧭",
+      "isOther": false,
+      "isSecret": false,
+      "options": [
+        {"label": "Left", "description": "Follow the café lane."},
+        {"label": "Right", "description": "Follow the river lane."}
+      ]
+    }],
+    "isBlocking": true
+  },
+  "fullPromptSha256": "66895da3047e59c08c12f128658a56e95a18e00086d613dbe2a24755a9c6a112"
+}
