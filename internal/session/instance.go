@@ -3856,37 +3856,18 @@ func collectProcessTreePIDsViaPgrep(rootPID int) ([]int, error) {
 	return allPIDs, probeErr
 }
 
+// isLikelyCodexProcessPID reports whether pid's command line names Codex
+// (codexProcessKind).
 func isLikelyCodexProcessPID(pid int) (bool, error) {
-	// Patch 53: read the command line from /proc instead of forking one
-	// `ps -p` per process. The probe runs with the instance lock held, and at
-	// ~20 ms a fork a 31-process pane tree cost ~650 ms of every status pass
-	// it landed in. /proc/<pid>/cmdline is NUL-separated argv, the same text
-	// `ps -o args=` prints. ps stays the fallback where /proc is unavailable.
-	if raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline"); err == nil {
-		return strings.Contains(strings.ToLower(strings.ReplaceAll(string(raw), "\x00", " ")), "codex"), nil
-	} else if errors.Is(err, os.ErrNotExist) && procFSAvailable() {
-		return false, fmt.Errorf("codex process probe: inspect pid %d: %w", pid, err)
-	}
-	// #nosec G204 -- "ps" is a fixed binary; only arg is strconv.Itoa(int).
-	argsOut, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
-	if err != nil {
-		return false, fmt.Errorf("codex process probe: inspect pid %d: %w", pid, err)
-	}
-	return strings.Contains(strings.ToLower(strings.TrimSpace(string(argsOut))), "codex"), nil
+	codex, _, err := codexProcessKind(pid)
+	return codex, err
 }
 
 func (i *Instance) collectCodexProcessCandidates() ([]int, error) {
-	pids, probeErr := i.collectTmuxPaneProcessTreePIDs()
-	candidates := make([]int, 0, len(pids))
-	for _, pid := range pids {
-		likely, err := isLikelyCodexProcessPID(pid)
-		if err != nil {
-			probeErr = errors.Join(probeErr, err)
-			continue
-		}
-		if likely {
-			candidates = append(candidates, pid)
-		}
+	procs, probeErr := i.collectCodexPaneProcesses()
+	candidates := make([]int, 0, len(procs))
+	for _, p := range procs {
+		candidates = append(candidates, p.pid)
 	}
 	return candidates, probeErr
 }
@@ -3952,9 +3933,9 @@ func (i *Instance) extractCodexSessionIDFromProcFD(pid int) (string, error) {
 }
 
 func (i *Instance) queryCodexSessionFromHostProcFD() (string, error) {
-	candidates, probeErr := i.collectCodexProcessCandidates()
-	for _, pid := range candidates {
-		sessionID, err := i.extractCodexSessionIDFromProcFD(pid)
+	procs, probeErr := codexPaneProcesses(i)
+	for _, p := range procs {
+		sessionID, err := i.extractCodexSessionIDFromProcFD(p.pid)
 		if sessionID != "" {
 			return sessionID, nil
 		}

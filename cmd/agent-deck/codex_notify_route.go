@@ -97,34 +97,11 @@ func isCodexArgv(argv []string) bool {
 	return len(argv) > 0 && strings.Contains(strings.ToLower(filepath.Base(argv[0])), "codex")
 }
 
-// isCodexAppServerArgv reports whether argv is Codex's app-server, the
-// process that serves every TUI of one CODEX_HOME: `codex app-server ...`,
-// a binary from the managed app-server-daemon package, or a process started
-// with --managed-daemon. Any one marker is enough; a daemon that carried none
-// would read as a pane, so they are deliberately redundant. Unlike the pane
-// test, Codex may also sit second, behind a launcher such as node: reading a
-// process as the daemon only ever withholds trust from its environment, so
-// erring this way fails closed.
+// isCodexAppServerArgv reports whether argv is Codex's app-server
+// (session.IsCodexAppServerArgv). The pane probes use the same test, so the
+// notify writer and the readers agree on which process is the daemon.
 func isCodexAppServerArgv(argv []string) bool {
-	k := -1
-	for i := 0; i < len(argv) && i < 2; i++ {
-		if strings.Contains(strings.ToLower(filepath.Base(argv[i])), "codex") {
-			k = i
-			break
-		}
-	}
-	if k < 0 {
-		return false
-	}
-	if strings.Contains(filepath.ToSlash(argv[k]), "/app-server-daemon/") {
-		return true
-	}
-	for _, arg := range argv[k+1:] {
-		if arg == "app-server" || arg == "--managed-daemon" || strings.HasPrefix(arg, "--managed-daemon=") {
-			return true
-		}
-	}
-	return false
+	return session.IsCodexAppServerArgv(argv)
 }
 
 // isNotifyWrapperArgv reports whether argv is a program that may sit between
@@ -161,22 +138,9 @@ func processArgv(pid int) ([]string, error) {
 	return argvFromPS(string(comm), string(args)), nil
 }
 
-// argvFromPS rebuilds argv from ps output. ps joins arguments with spaces, so
-// the executable is taken whole from comm (a full path on macOS, spaces
-// included, as in "/Users/First Last/.codex/...") and only the remainder of
-// args is split.
+// argvFromPS rebuilds argv from ps output (session.ArgvFromPS).
 func argvFromPS(comm, args string) []string {
-	comm, args = strings.TrimSpace(comm), strings.TrimSpace(args)
-	if comm == "" {
-		return strings.Fields(args)
-	}
-	rest := args
-	if strings.HasPrefix(args, comm) {
-		rest = args[len(comm):]
-	} else if fields := strings.Fields(args); len(fields) > 0 {
-		rest = strings.Join(fields[1:], " ")
-	}
-	return append([]string{comm}, strings.Fields(rest)...)
+	return session.ArgvFromPS(comm, args)
 }
 
 // processParentPID reads a process's parent pid: /proc/<pid>/stat on Linux

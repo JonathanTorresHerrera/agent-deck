@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 )
@@ -30,16 +29,10 @@ var codexPaneOpenPaths = (*Instance).openCodexProcessPaths
 var codexPaneProcessPIDs = (*Instance).collectCodexProcessCandidates
 
 func (i *Instance) openCodexProcessPaths() ([]string, error) {
-	pids, probeErr := i.collectCodexProcessCandidates()
+	procs, probeErr := codexPaneProcesses(i)
 	var paths []string
-	for _, pid := range pids {
-		var open []string
-		var err error
-		if runtime.GOOS == "linux" {
-			open, err = procFDLinkTargets(pid)
-		} else {
-			open, err = procfdOpenVnodePaths(pid)
-		}
+	for _, p := range procs {
+		open, err := codexProcessOpenFiles(p.pid)
 		paths = append(paths, open...)
 		probeErr = errors.Join(probeErr, err)
 	}
