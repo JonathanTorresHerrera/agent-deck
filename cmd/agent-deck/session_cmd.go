@@ -183,6 +183,7 @@ func printSessionHelp() {
 	fmt.Println("  send <id> <message>     Send a message to a running session (--queue: never silently lost, see send-status; --image <path>)")
 	fmt.Println("  send-status <send-id>   State of a queued send: queued, typed, submitted, landed or failed")
 	fmt.Println("  approve <id> [choice]   Resolve a visible Codex approval prompt")
+	fmt.Println("  skip-codex-update <id>  Skip a Codex startup update prompt with Esc (never installs the update)")
 	fmt.Println("  clear-bell <id|title>   Mark the Ask-Aida bell handled (--note, --by, --reason)")
 	fmt.Println("  output <id>             Get the last response from a session")
 	fmt.Println("  context [id]            Show what is loaded into the agent's context, ranked by cost")
