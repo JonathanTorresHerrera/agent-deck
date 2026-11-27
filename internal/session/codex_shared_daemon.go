@@ -124,6 +124,94 @@ func codexProcessKind(pid int) (codex, shared bool, err error) {
 	return true, IsCodexAppServerArgv(ArgvFromPS(string(comm), args)), nil
 }
 
+// codexSharedDaemonEvidence picks, from the files a shared app-server daemon
+// in the pane's tree holds open, the ones that count as this pane's own
+// evidence. The rules, in order:
+//
+//   - The pane's own Codex processes are the authority on its thread: when
+//     they hold a conversation's rollout or writer lock, nothing the daemon
+//     holds counts.
+//   - A daemon serving several conversations says nothing about which one
+//     this pane talks to, so none of them counts.
+//   - The daemon's one conversation counts only if it can be this instance's:
+//     never a thread another live session claims, and never a thread other
+//     than the one a bound instance is already bound to. Daemon files can
+//     confirm a binding or bootstrap a fresh host, but never move a binding.
+//
+// own is what the pane's other Codex processes hold open; shared is what the
+// daemon holds open. The result is the subset of shared that counts.
+func (i *Instance) codexSharedDaemonEvidence(own, shared []string) []string {
+	if len(shared) == 0 {
+		return nil
+	}
+	home := i.getCodexHomeDir()
+	lockDir := codexWriterLockDir(home)
+	for _, path := range own {
+		if id := codexOpenFileThread(path, lockDir); id != "" && codexConversationFile(path, id, home) {
+			return nil
+		}
+	}
+	byThread := map[string][]string{}
+	for _, path := range shared {
+		if id := codexOpenFileThread(path, lockDir); id != "" && codexConversationFile(path, id, home) {
+			byThread[id] = append(byThread[id], path)
+		}
+	}
+	if len(byThread) != 1 {
+		return nil
+	}
+	for id, files := range byThread {
+		if bound := strings.TrimSpace(i.CodexSessionID); bound != "" && id != bound {
+			return nil
+		}
+		if cachedCodexPeerIDs(i)[id] {
+			return nil
+		}
+		return files
+	}
+	return nil
+}
+
+// codexWriterLockDir is home's thread-writer-locks directory, symlinks
+// resolved, with a trailing separator.
+func codexWriterLockDir(home string) string {
+	lockDir := filepath.Join(ExpandPath(home), "thread-writer-locks")
+	if resolved, err := filepath.EvalSymlinks(lockDir); err == nil {
+		lockDir = resolved
+	}
+	return lockDir + string(filepath.Separator)
+}
+
+// codexOpenFileThread names the thread an open file belongs to: a rollout's
+// thread, or the thread of a writer lock under lockDir. Other files name none.
+func codexOpenFileThread(path, lockDir string) string {
+	if id := extractCodexSessionIDFromPath(path); id != "" {
+		return id
+	}
+	if strings.HasPrefix(path, lockDir) {
+		if m := codexThreadWriterLockPathRE.FindStringSubmatch(path); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// codexConversationFile reports whether an open rollout or writer lock of
+// thread id belongs to a conversation: not a subagent thread and not a
+// `codex exec` run. A rollout is judged by its own head, a lock by the
+// thread's flushed rollout. A thread whose metadata cannot be read yet (a
+// fresh composer holds only its lock; a rollout mid-write) counts, so it can
+// never hide a second conversation.
+func codexConversationFile(path, id, home string) bool {
+	var meta codexThreadMeta
+	if extractCodexSessionIDFromPath(path) != "" {
+		meta = readCodexRolloutThreadMeta(path)
+	} else {
+		meta, _ = codexThreadMetaForSession(id, home)
+	}
+	return !meta.valid || (!meta.Exec && meta.ThreadSource != "subagent")
+}
+
 // collectCodexPaneProcesses returns the pane tree's Codex processes, each
 // classified from one read of its command line.
 func (i *Instance) collectCodexPaneProcesses() ([]codexPaneProcess, error) {

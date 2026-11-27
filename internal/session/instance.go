@@ -3932,9 +3932,18 @@ func (i *Instance) extractCodexSessionIDFromProcFD(pid int) (string, error) {
 	return "", probeErr
 }
 
+// queryCodexSessionFromHostProcFD is the rotation probe: the first rollout
+// the pane's own Codex processes hold open names the thread. Codex's shared
+// app-server daemon is skipped. It sits in the pane of the session that
+// started it and holds every thread it serves, so its first rollout may be a
+// rider's. The probe can only move a binding, and the daemon's files never may
+// (codexSharedDaemonEvidence); the identity steps before it still read them.
 func (i *Instance) queryCodexSessionFromHostProcFD() (string, error) {
 	procs, probeErr := codexPaneProcesses(i)
 	for _, p := range procs {
+		if p.shared {
+			continue
+		}
 		sessionID, err := i.extractCodexSessionIDFromProcFD(p.pid)
 		if sessionID != "" {
 			return sessionID, nil
@@ -4099,7 +4108,14 @@ func (i *Instance) queryCodexSessionFromProcessFiles() (string, string, error) {
 
 	// Non-Linux (e.g. macOS): in-process libproc FD scan first, with lsof kept
 	// only as a compatibility fallback when the native probe cannot answer.
-	candidates, candidateErr := i.collectCodexProcessCandidates()
+	// As on Linux, the shared app-server daemon is not probed.
+	procs, candidateErr := codexPaneProcesses(i)
+	candidates := make([]int, 0, len(procs))
+	for _, p := range procs {
+		if !p.shared {
+			candidates = append(candidates, p.pid)
+		}
+	}
 	if sessionID, nativeErr := i.queryCodexSessionFromHostNative(candidates); sessionID != "" {
 		return sessionID, "", nil
 	} else if nativeErr == nil && candidateErr == nil {
