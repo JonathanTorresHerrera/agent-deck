@@ -22,14 +22,20 @@ import (
 // read as the host pane's own.
 
 // IsCodexAppServerArgv reports whether argv is Codex's app-server, the
-// process that serves every TUI of one CODEX_HOME: `codex app-server ...`,
-// a binary from the managed app-server-daemon package, or a process started
-// with --managed-daemon. Any one marker is enough; a daemon that carried none
-// would read as a pane, so they are deliberately redundant. Unlike a pane
-// process, Codex may also sit second, behind a launcher such as node: reading
-// a process as the daemon only ever withholds trust from what it holds, so
-// erring this way fails closed.
+// process that serves every TUI of one CODEX_HOME: any binary from the
+// managed app-server-daemon package, whatever its name, or a Codex binary run
+// as `codex app-server ...` or with --managed-daemon. Any one marker is
+// enough; a daemon that carried none would read as a pane, so they are
+// deliberately redundant. Unlike a pane process, the daemon may also sit
+// second, behind a launcher such as node: reading a process as the daemon
+// only ever withholds trust from what it holds, so erring this way fails
+// closed.
 func IsCodexAppServerArgv(argv []string) bool {
+	for i := 0; i < len(argv) && i < 2; i++ {
+		if strings.Contains(filepath.ToSlash(argv[i]), "/app-server-daemon/") {
+			return true
+		}
+	}
 	k := -1
 	for i := 0; i < len(argv) && i < 2; i++ {
 		if strings.Contains(strings.ToLower(filepath.Base(argv[i])), "codex") {
@@ -39,9 +45,6 @@ func IsCodexAppServerArgv(argv []string) bool {
 	}
 	if k < 0 {
 		return false
-	}
-	if strings.Contains(filepath.ToSlash(argv[k]), "/app-server-daemon/") {
-		return true
 	}
 	for _, arg := range argv[k+1:] {
 		if arg == "app-server" || arg == "--managed-daemon" || strings.HasPrefix(arg, "--managed-daemon=") {
@@ -118,8 +121,14 @@ func codexProcessKind(pid int) (codex, shared bool, err error) {
 	if !strings.Contains(strings.ToLower(args), "codex") {
 		return false, false, nil
 	}
-	// comm keeps an executable path with spaces whole. Without it, the args
-	// split alone still finds the daemon's own arguments.
+	if IsCodexAppServerArgv(strings.Fields(args)) {
+		return true, true, nil
+	}
+	if !strings.Contains(args, "app-server") && !strings.Contains(args, "--managed-daemon") {
+		return true, false, nil
+	}
+	// Only a daemon whose executable path holds spaces gets here: ps joins
+	// argv with spaces, and comm keeps that path whole.
 	// #nosec G204 -- "ps" is a fixed binary; only arg is strconv.Itoa(int).
 	comm, _ := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	return true, IsCodexAppServerArgv(ArgvFromPS(string(comm), args)), nil

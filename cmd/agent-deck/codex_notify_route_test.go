@@ -471,6 +471,7 @@ func TestClassifyCodexNotifySource(t *testing.T) {
 		{"shared daemon", map[int][]string{100: {daemonBin, "app-server", "--listen", "unix://"}}, nil, codexNotifyFromDaemon},
 		{"daemon from another install", map[int][]string{100: {tui, "app-server", "--listen", "unix://"}}, nil, codexNotifyFromDaemon},
 		{"daemon package binary", map[int][]string{100: {daemonBin, "--listen"}}, nil, codexNotifyFromDaemon},
+		{"daemon package binary not named codex", map[int][]string{100: {"/home/u/.codex/packages/app-server-daemon/releases/0.172.0/bin/app-server", "--listen", "unix://"}}, nil, codexNotifyFromDaemon},
 		{"managed daemon flag alone", map[int][]string{100: {tui, "serve", "--managed-daemon"}}, nil, codexNotifyFromDaemon},
 		{"through env and sh", map[int][]string{100: {"/usr/bin/env", "X=1", "agent-deck"}, 90: {"sh", "-c", "x"}, 80: {daemonBin, "app-server"}},
 			map[int]int{100: 90, 90: 80}, codexNotifyFromDaemon},

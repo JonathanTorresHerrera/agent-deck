@@ -216,6 +216,27 @@ func TestCodexSharedDaemon_PaneOwnFilesComeFirst(t *testing.T) {
 	require.Equal(t, current, id)
 }
 
+func TestIsCodexAppServerArgv(t *testing.T) {
+	const pkg = "/home/u/.codex/packages/app-server-daemon/releases/0.172.0-x86_64-unknown-linux-musl/bin/"
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want bool
+	}{
+		{"daemon", []string{pkg + "codex", "app-server", "--listen", "unix://"}, true},
+		{"daemon helper", []string{pkg + "codex-code-mode-host", "--listen", "grpc+stdio://"}, true},
+		{"package binary not named codex", []string{pkg + "app-server", "--listen", "unix://"}, true},
+		{"behind a launcher", []string{"/usr/bin/node", pkg + "server.js"}, true},
+		{"another install run as app-server", []string{"/opt/bin/codex", "app-server"}, true},
+		{"managed daemon flag", []string{"/opt/bin/codex", "serve", "--managed-daemon=1"}, true},
+		{"tui", []string{"/opt/bin/codex", "--yolo", "resume", "01b0"}, false},
+		{"script named codex", []string{"/usr/bin/python3", "/opt/codex_bridge.py"}, false},
+		{"empty", nil, false},
+	} {
+		require.Equal(t, tc.want, IsCodexAppServerArgv(tc.argv), tc.name)
+	}
+}
+
 func TestCodexProcessKindMarksTheSharedDaemon(t *testing.T) {
 	if !procFSAvailable() {
 		t.Skip("needs /proc")
